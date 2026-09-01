@@ -13,12 +13,12 @@ FEED_URL = "https://fitgirl-repacks.site/feed/"
 MAX_NOTIFICATIONS_PER_RUN = "5"
 SEEN_TTL_DAYS = "30"
 
-# Create it with:
-#   wrangler kv namespace create SEEN_RELEASES
-# then paste the returned id below.
+# Created with: wrangler kv namespace create SEEN_RELEASES
+# The namespace id is an identifier, not a credential: it is meant to be
+# versioned. Access is granted by the account's own auth, never by this id.
 [[kv_namespaces]]
 binding = "SEEN_RELEASES"
-id = "<REPLACE_WITH_YOUR_KV_NAMESPACE_ID>"
+id = "52fe2590630f460ea0c54198fd23e314"
 
 # Secrets are NEVER stored here. Load the ones for the active channel:
 #   NOTIFIER = "telegram"   -> wrangler secret put TELEGRAM_BOT_TOKEN
