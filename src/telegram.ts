@@ -90,15 +90,26 @@ async function fetchCover(
       signal: controller.signal,
     });
     if (!response.ok) {
+      console.warn(`Cover download failed with HTTP ${response.status}: ${imageUrl}`);
       return null;
     }
-    if (!(response.headers.get("Content-Type") ?? "").toLowerCase().startsWith("image/")) {
+
+    const contentType = (response.headers.get("Content-Type") ?? "").toLowerCase();
+    if (!contentType.startsWith("image/")) {
+      console.warn(`Cover is not an image (${contentType || "no type"}): ${imageUrl}`);
       return null;
     }
 
     const blob = await response.blob();
-    return blob.size > 0 && blob.size <= MAX_COVER_BYTES ? blob : null;
-  } catch {
+    if (blob.size === 0 || blob.size > MAX_COVER_BYTES) {
+      console.warn(`Cover size out of range (${blob.size} bytes): ${imageUrl}`);
+      return null;
+    }
+    return blob;
+  } catch (error) {
+    console.warn(
+      `Cover download errored: ${error instanceof Error ? error.message : String(error)}`,
+    );
     return null;
   } finally {
     clearTimeout(timer);

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import worker, { type Env, dryRun, runNotifier } from "../src/index";
+import worker, { type Env, NOTIFY_INTERVAL_MS, dryRun, runNotifier } from "../src/index";
 import { TELEGRAM_API_BASE } from "../src/telegram";
 import { CALLMEBOT_ENDPOINT } from "../src/whatsapp";
 import { FITGIRL_FEED_XML } from "./fixtures";
@@ -98,7 +98,7 @@ describe("runNotifier", () => {
   it("notifies every new release and records them in KV", async () => {
     const { env, kv, notified } = scenario();
 
-    const result = await runNotifier(env, { sleep: async () => {} });
+    const result = await runNotifier(env, { sleep: async () => {} }, async () => {});
 
     expect(result.channel).toBe("telegram");
     expect(result.fetched).toBe(4);
@@ -113,7 +113,7 @@ describe("runNotifier", () => {
     const { env, kv, notified } = scenario();
     kv.seed(RELEASE_IDS[0] as string);
 
-    const result = await runNotifier(env, { sleep: async () => {} });
+    const result = await runNotifier(env, { sleep: async () => {} }, async () => {});
 
     expect(result.unseen).toBe(1);
     expect(result.sent).toEqual([RELEASE_IDS[1]]);
@@ -124,8 +124,8 @@ describe("runNotifier", () => {
   it("is idempotent across consecutive runs", async () => {
     const { env, notified } = scenario();
 
-    await runNotifier(env, { sleep: async () => {} });
-    const second = await runNotifier(env, { sleep: async () => {} });
+    await runNotifier(env, { sleep: async () => {} }, async () => {});
+    const second = await runNotifier(env, { sleep: async () => {} }, async () => {});
 
     expect(second.unseen).toBe(0);
     expect(second.sent).toEqual([]);
@@ -135,7 +135,7 @@ describe("runNotifier", () => {
   it("caps the batch at MAX_NOTIFICATIONS_PER_RUN and defers the rest", async () => {
     const { env, kv, notified } = scenario({ MAX_NOTIFICATIONS_PER_RUN: "1" });
 
-    const result = await runNotifier(env, { sleep: async () => {} });
+    const result = await runNotifier(env, { sleep: async () => {} }, async () => {});
 
     expect(result.unseen).toBe(2);
     expect(result.selected).toBe(1);
@@ -143,7 +143,7 @@ describe("runNotifier", () => {
     expect(kv.entries.has(RELEASE_IDS[1] as string)).toBe(false);
 
     // The deferred release goes out on the following run.
-    const second = await runNotifier(env, { sleep: async () => {} });
+    const second = await runNotifier(env, { sleep: async () => {} }, async () => {});
     expect(second.sent).toEqual([RELEASE_IDS[1]]);
   });
 
@@ -153,7 +153,7 @@ describe("runNotifier", () => {
       textOf(url).includes("Cyber Drift") ? 400 : 200,
     );
 
-    const result = await runNotifier(env, { sleep: async () => {} });
+    const result = await runNotifier(env, { sleep: async () => {} }, async () => {});
 
     expect(result.sent).toEqual([RELEASE_IDS[0]]);
     expect(result.failed.map((f) => f.id)).toEqual([RELEASE_IDS[1]]);
@@ -166,9 +166,9 @@ describe("runNotifier", () => {
       failFirstBatch && textOf(url).includes("Cyber Drift") ? 400 : 200,
     );
 
-    await runNotifier(env, { sleep: async () => {} });
+    await runNotifier(env, { sleep: async () => {} }, async () => {});
     failFirstBatch = false;
-    const second = await runNotifier(env, { sleep: async () => {} });
+    const second = await runNotifier(env, { sleep: async () => {} }, async () => {});
 
     expect(second.sent).toEqual([RELEASE_IDS[1]]);
     expect(kv.entries.has(RELEASE_IDS[1] as string)).toBe(true);
@@ -179,21 +179,21 @@ describe("runNotifier", () => {
     vi.stubGlobal("fetch", vi.fn(async () => new Response("nope", { status: 403 })));
     const env: Env = { SEEN_RELEASES: kv, FEED_URL, ...TELEGRAM_SECRETS };
 
-    await expect(runNotifier(env, { sleep: async () => {} })).rejects.toThrow(/403/);
+    await expect(runNotifier(env, { sleep: async () => {} }, async () => {})).rejects.toThrow(/403/);
     expect(kv.putCalls).toBe(0);
   });
 
   it("refuses to run without the active channel's credentials", async () => {
     const { env, notified } = scenario({ TELEGRAM_CHAT_ID: "" });
 
-    await expect(runNotifier(env)).rejects.toThrow(/wrangler secret put/);
+    await expect(runNotifier(env, {}, async () => {})).rejects.toThrow(/wrangler secret put/);
     expect(notified()).toHaveLength(0);
   });
 
   it("refuses to run with an unknown NOTIFIER", async () => {
     const { env, notified } = scenario({ NOTIFIER: "signal" });
 
-    await expect(runNotifier(env)).rejects.toThrow(/Unknown NOTIFIER/);
+    await expect(runNotifier(env, {}, async () => {})).rejects.toThrow(/Unknown NOTIFIER/);
     expect(notified()).toHaveLength(0);
   });
 });
@@ -202,7 +202,7 @@ describe("channel selection", () => {
   it("uses Telegram by default", async () => {
     const { env, notified } = scenario();
 
-    await runNotifier(env, { sleep: async () => {} });
+    await runNotifier(env, { sleep: async () => {} }, async () => {});
 
     expect(notified().every((u) => u.origin === TELEGRAM_API_BASE)).toBe(true);
   });
@@ -213,7 +213,7 @@ describe("channel selection", () => {
       ...CALLMEBOT_SECRETS,
     });
 
-    const result = await runNotifier(env, { sleep: async () => {} });
+    const result = await runNotifier(env, { sleep: async () => {} }, async () => {});
 
     expect(result.channel).toBe("callmebot");
     expect(notified()).toHaveLength(2);
@@ -226,7 +226,7 @@ describe("channel selection", () => {
     delete env.TELEGRAM_BOT_TOKEN;
     delete env.TELEGRAM_CHAT_ID;
 
-    await expect(runNotifier(env, { sleep: async () => {} })).resolves.toMatchObject({
+    await expect(runNotifier(env, { sleep: async () => {} }, async () => {})).resolves.toMatchObject({
       channel: "callmebot",
     });
     expect(notified()).toHaveLength(2);
@@ -373,7 +373,7 @@ describe("release filtering", () => {
   it("never notifies the site's non-release posts", async () => {
     const { env, kv, notified } = scenario();
 
-    const result = await runNotifier(env, { sleep: async () => {} });
+    const result = await runNotifier(env, { sleep: async () => {} }, async () => {});
 
     expect(result.filtered).toBe(2);
     const texts = notified().map((u) => textOf(u));
@@ -388,7 +388,7 @@ describe("release filtering", () => {
   it("does not spend the per-run budget on filtered posts", async () => {
     const { env, notified } = scenario({ MAX_NOTIFICATIONS_PER_RUN: "2" });
 
-    await runNotifier(env, { sleep: async () => {} });
+    await runNotifier(env, { sleep: async () => {} }, async () => {});
 
     // Both real releases go out even though the feed holds 4 entries.
     expect(notified()).toHaveLength(2);
@@ -397,7 +397,7 @@ describe("release filtering", () => {
   it("notifies everything when REQUIRE_CATEGORY is empty", async () => {
     const { env, notified } = scenario({ REQUIRE_CATEGORY: "" });
 
-    const result = await runNotifier(env, { sleep: async () => {} });
+    const result = await runNotifier(env, { sleep: async () => {} }, async () => {});
 
     expect(result.filtered).toBe(0);
     expect(notified()).toHaveLength(4);
@@ -406,10 +406,36 @@ describe("release filtering", () => {
   it("honours a custom required category", async () => {
     const { env, notified } = scenario({ REQUIRE_CATEGORY: "Updates Digest" });
 
-    const result = await runNotifier(env, { sleep: async () => {} });
+    const result = await runNotifier(env, { sleep: async () => {} }, async () => {});
 
     expect(result.filtered).toBe(3);
     expect(notified()).toHaveLength(1);
     expect(textOf(notified()[0] as URL)).toContain("Updates Digest");
+  });
+});
+
+describe("pacing", () => {
+  it("pauses between notifications but not before the first", async () => {
+    const { env } = scenario();
+    const pauses: number[] = [];
+
+    const result = await runNotifier(env, { sleep: async () => {} }, async (ms) => {
+      pauses.push(ms);
+    });
+
+    // Two releases sent -> exactly one pause between them.
+    expect(result.sent).toHaveLength(2);
+    expect(pauses).toEqual([NOTIFY_INTERVAL_MS]);
+  });
+
+  it("still paces when a send fails, so one failure cannot burst the rest", async () => {
+    const { env } = scenario({}, (url) => (textOf(url).includes("Cyber Drift") ? 400 : 200));
+    const pauses: number[] = [];
+
+    await runNotifier(env, { sleep: async () => {} }, async (ms) => {
+      pauses.push(ms);
+    });
+
+    expect(pauses).toEqual([NOTIFY_INTERVAL_MS]);
   });
 });

@@ -59,6 +59,16 @@ export interface Env {
 
 export const DEFAULT_MAX_NOTIFICATIONS_PER_RUN = 5;
 
+/**
+ * Pause between notifications within a run.
+ *
+ * Telegram throttles at roughly one message per second per chat, and answers a
+ * burst with 429. Since a 429 is retried once and then falls back to a plain
+ * text message, a burst silently costs the cover art — so the sends are paced
+ * instead. At the default cap this adds about five seconds to a run.
+ */
+export const NOTIFY_INTERVAL_MS = 1_200;
+
 export interface RunResult {
   channel: ChannelName;
   fetched: number;
@@ -119,6 +129,9 @@ function errorMessage(error: unknown): string {
 export async function runNotifier(
   env: Env,
   sendOptions: SendOptions = {},
+  /** Injectable pause, so tests do not wait for real pacing. */
+  pause: (ms: number) => Promise<void> = (ms) =>
+    new Promise((resolve) => setTimeout(resolve, ms)),
 ): Promise<RunResult> {
   // Throws on a bad channel or missing credentials, before any KV write.
   const notifier: Notifier = createNotifier(env);
@@ -147,7 +160,11 @@ export async function runNotifier(
     failed: [],
   };
 
-  for (const release of selected) {
+  for (const [index, release] of selected.entries()) {
+    if (index > 0) {
+      await pause(NOTIFY_INTERVAL_MS);
+    }
+
     try {
       await notifier.send(release, sendOptions);
     } catch (error) {
