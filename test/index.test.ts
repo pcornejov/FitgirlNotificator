@@ -87,10 +87,14 @@ function scenario(
       sent.push(entry);
       call += 1;
       const status = notificationStatus(entry, call);
-      return new Response(JSON.stringify({ ok: status === 200 }), {
-        status,
-        headers: { "Content-Type": "application/json" },
-      });
+      // Each channel has its own success shape: JSON for Telegram, an HTML
+      // confirmation for CallMeBot.
+      const body = url.origin === TELEGRAM_API_BASE
+        ? JSON.stringify({ ok: status === 200 })
+        : status === 200
+          ? "<p><b>Message queued.</b> You will receive it in a few seconds."
+          : "<p><b>APIKey is invalid.</b>";
+      return new Response(body, { status });
     }
 
     if (url.href === FEED_URL) {
@@ -505,7 +509,12 @@ describe("updated repacks", () => {
         });
       }
       notified().push({ url, init });
-      return new Response(JSON.stringify({ ok: true }), { status: 200 });
+      return new Response(
+        url.origin === TELEGRAM_API_BASE
+          ? JSON.stringify({ ok: true })
+          : "<p><b>Message queued.</b>",
+        { status: 200 },
+      );
     });
 
     const second = await runNotifier(env, { sleep: async () => {} }, async () => {});

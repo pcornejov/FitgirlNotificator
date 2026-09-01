@@ -145,3 +145,64 @@ describe("sendWhatsAppNotification", () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 });
+
+describe("response body verification", () => {
+  /** CallMeBot answers 2xx even when it refuses, so the body decides. */
+  function mockBody(body: string, status = 200): ReturnType<typeof vi.fn> {
+    const impl = vi.fn(async () => new Response(body, { status }));
+    vi.stubGlobal("fetch", impl);
+    return impl;
+  }
+
+  it("accepts the queued confirmation", async () => {
+    mockBody("<p>Message to: +1<p><b>Message queued.</b> You will receive it in a few seconds.");
+
+    await expect(
+      sendWhatsAppNotification(PHONE, API_KEY, RELEASE, false, { sleep: async () => {} }),
+    ).resolves.toBeUndefined();
+  });
+
+  it("rejects the 203 an invalid key produces, which ok would call success", async () => {
+    const fetchMock = mockBody(
+      '<p style="color:red"><b>APIKey is invalid.</b> Please create a new one.',
+      203,
+    );
+
+    const error = await sendWhatsAppNotification(PHONE, API_KEY, RELEASE, false, {
+      sleep: async () => {},
+    }).catch((e: unknown) => e);
+
+    expect(error).toBeInstanceOf(NotificationError);
+    expect((error as NotificationError).message).toContain("APIKey is invalid");
+    // A refusal is not transient: resending the same request repeats it.
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejects any 2xx body that does not confirm queueing", async () => {
+    mockBody("<p>Something else entirely", 200);
+
+    await expect(
+      sendWhatsAppNotification(PHONE, API_KEY, RELEASE, false, { sleep: async () => {} }),
+    ).rejects.toBeInstanceOf(NotificationError);
+  });
+
+  it("strips the HTML so the log carries CallMeBot's own wording", async () => {
+    mockBody('<p style="color:red"><b>APIKey is invalid.</b> Please create a new one.', 203);
+
+    const error = await sendWhatsAppNotification(PHONE, API_KEY, RELEASE, false, {
+      sleep: async () => {},
+    }).catch((e: unknown) => e);
+
+    expect((error as NotificationError).message).not.toContain("<");
+  });
+
+  it("falls back to the status when the body is empty", async () => {
+    mockBody("", 203);
+
+    const error = await sendWhatsAppNotification(PHONE, API_KEY, RELEASE, false, {
+      sleep: async () => {},
+    }).catch((e: unknown) => e);
+
+    expect((error as NotificationError).message).toContain("203");
+  });
+});

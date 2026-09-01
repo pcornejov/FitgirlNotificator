@@ -14,6 +14,29 @@ export const CHANNEL = "callmebot";
 
 export { DEFAULT_RETRY_DELAY_MS, DEFAULT_TIMEOUT_MS, type SendOptions } from "./notify";
 
+/**
+ * CallMeBot answers 203 — not a 4xx — when it refuses a message, and `ok` is
+ * true across the whole 2xx range, so the status alone reports a rejection as
+ * a success. The body is the only reliable signal: a queued message says so.
+ */
+const QUEUED_RE = /message\s+queued/i;
+
+async function verifyBody(response: Response): Promise<string | null> {
+  const body = await response.text();
+  if (QUEUED_RE.test(body)) {
+    return null;
+  }
+
+  // Surface CallMeBot's own wording, stripped of the HTML it wraps it in.
+  const reason = body
+    .replace(/<[^>]*>/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 160);
+
+  return `CallMeBot did not queue the message: ${reason === "" ? `HTTP ${response.status}` : reason}`;
+}
+
 /** The message body sent to WhatsApp for a release. */
 export function formatMessage(release: Release, isUpdate = false): string {
   const heading = isUpdate
@@ -58,5 +81,6 @@ export async function sendWhatsAppNotification(
     { url: buildRequestUrl(phone, apiKey, formatMessage(release, isUpdate)) },
     CHANNEL,
     options,
+    verifyBody,
   );
 }

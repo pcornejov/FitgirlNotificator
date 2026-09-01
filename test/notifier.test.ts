@@ -59,9 +59,10 @@ describe("createNotifier", () => {
   });
 
   it("routes the release to the selected channel's endpoint", async () => {
-    const fetchMock = vi.fn(
-      async (_input: string | URL) =>
-        new Response(JSON.stringify({ ok: true }), { status: 200 }),
+    const fetchMock = vi.fn(async (input: string | URL) =>
+      String(input).includes("callmebot")
+        ? new Response("<p><b>Message queued.</b>", { status: 200 })
+        : new Response(JSON.stringify({ ok: true }), { status: 200 }),
     );
     vi.stubGlobal("fetch", fetchMock);
 
@@ -136,9 +137,10 @@ describe("createNotifiers", () => {
   });
 
   it("delivers one release to both endpoints", async () => {
-    const fetchMock = vi.fn(
-      async (_input: string | URL) =>
-        new Response(JSON.stringify({ ok: true }), { status: 200 }),
+    const fetchMock = vi.fn(async (input: string | URL) =>
+      String(input).includes("callmebot")
+        ? new Response("<p><b>Message queued.</b>", { status: 200 })
+        : new Response(JSON.stringify({ ok: true }), { status: 200 }),
     );
     vi.stubGlobal("fetch", fetchMock);
 
