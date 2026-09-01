@@ -19,7 +19,7 @@ export const FITGIRL_FEED_XML = `<?xml version="1.0" encoding="UTF-8"?>
     <category><![CDATA[Lossless Repack]]></category>
     <guid isPermaLink="false">https://fitgirl-repacks.site/?p=48211</guid>
     <description><![CDATA[<p>Read more <a href="https://example.com/link">here</a></p>]]></description>
-    <content:encoded><![CDATA[<p>Genres/Tags: Horror<link rel="stylesheet" href="https://evil.example/x.css"></p>]]></content:encoded>
+    <content:encoded><![CDATA[<p><img decoding="async" src="https://i2.imageban.ru/out/2026/09/01/cover-one.jpg" alt="cover" /><img src="https://i2.imageban.ru/out/2026/09/01/screenshot.jpg" /></p><p>Genres/Tags: Horror<link rel="stylesheet" href="https://evil.example/x.css"></p>]]></content:encoded>
   </item>
   <item>
     <title><![CDATA[Cyber Drift 2 &amp; The Lost City]]></title>

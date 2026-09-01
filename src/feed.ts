@@ -10,6 +10,8 @@ export interface Release {
   link: string;
   /** Raw <pubDate> value as published by the feed (RFC 822). */
   publishedAt: string;
+  /** Cover image from the post body, when the item embeds one. */
+  imageUrl?: string;
 }
 
 /** Browser-like UA: the site sits behind a WAF that rejects generic bot agents. */
@@ -30,6 +32,14 @@ export class FeedError extends Error {
 }
 
 const ITEM_RE = /<item\b[^>]*>([\s\S]*?)<\/item>/gi;
+
+/** Ordered by preference: the full post body first, the summary as fallback. */
+const CONTENT_BLOCK_RES = [
+  /<content:encoded\b[^>]*>([\s\S]*?)<\/content:encoded>/i,
+  /<description\b[^>]*>([\s\S]*?)<\/description>/i,
+];
+
+const IMG_SRC_RE = /<img[^>]+\bsrc=["']([^"']+)["']/i;
 
 /**
  * Blocks that legitimately embed markup (and therefore may contain tags whose
@@ -85,6 +95,33 @@ function readTag(itemXml: string, tag: string): string {
   return match?.[1] === undefined ? "" : cleanText(match[1]);
 }
 
+/**
+ * First image embedded in the post body, which on FitGirl is the cover art.
+ *
+ * Sending it explicitly beats relying on the messaging app's link preview,
+ * which renders inconsistently depending on what it manages to scrape.
+ */
+function readCoverImage(itemXml: string): string | undefined {
+  for (const blockRe of CONTENT_BLOCK_RES) {
+    const content = blockRe.exec(itemXml)?.[1];
+    if (content === undefined) {
+      continue;
+    }
+
+    const src = IMG_SRC_RE.exec(stripCdata(content))?.[1];
+    if (src === undefined) {
+      continue;
+    }
+
+    const url = decodeEntities(src).trim();
+    if (url.startsWith("http://") || url.startsWith("https://")) {
+      return url;
+    }
+  }
+
+  return undefined;
+}
+
 /** Parses an RSS document into releases, skipping entries without a usable id. */
 export function parseFeed(xml: string): Release[] {
   const releases: Release[] = [];
@@ -92,7 +129,10 @@ export function parseFeed(xml: string): Release[] {
   ITEM_RE.lastIndex = 0;
   let itemMatch: RegExpExecArray | null = ITEM_RE.exec(xml);
   while (itemMatch !== null) {
-    const itemXml = (itemMatch[1] ?? "").replace(RICH_TEXT_BLOCKS_RE, "");
+    const rawItemXml = itemMatch[1] ?? "";
+    // Fields are read from the item with its rich-text blocks removed, so
+    // markup embedded in the post body cannot be mistaken for a field.
+    const itemXml = rawItemXml.replace(RICH_TEXT_BLOCKS_RE, "");
     const title = readTag(itemXml, "title");
     const link = readTag(itemXml, "link");
     const guid = readTag(itemXml, "guid");
@@ -100,7 +140,12 @@ export function parseFeed(xml: string): Release[] {
 
     const id = guid !== "" ? guid : link;
     if (id !== "" && title !== "") {
-      releases.push({ id, title, link, publishedAt });
+      const release: Release = { id, title, link, publishedAt };
+      const imageUrl = readCoverImage(rawItemXml);
+      if (imageUrl !== undefined) {
+        release.imageUrl = imageUrl;
+      }
+      releases.push(release);
     }
 
     itemMatch = ITEM_RE.exec(xml);

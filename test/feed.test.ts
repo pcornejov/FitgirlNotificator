@@ -34,6 +34,7 @@ describe("parseFeed", () => {
       title: "Silent Hill’s Echo – Director's Cut",
       link: "https://fitgirl-repacks.site/silent-hills-echo/",
       publishedAt: "Mon, 01 Sep 2025 08:30:00 +0000",
+      imageUrl: "https://i2.imageban.ru/out/2026/09/01/cover-one.jpg",
     });
   });
 
@@ -45,6 +46,40 @@ describe("parseFeed", () => {
   it("ignores markup embedded in description/content:encoded blocks", () => {
     const releases = parseFeed(FITGIRL_FEED_XML);
     // The first item embeds a <link> tag inside content:encoded.
+    expect(releases[0]?.link).toBe("https://fitgirl-repacks.site/silent-hills-echo/");
+  });
+
+  it("extracts the first embedded image as the cover", () => {
+    const releases = parseFeed(FITGIRL_FEED_XML);
+    expect(releases[0]?.imageUrl).toBe("https://i2.imageban.ru/out/2026/09/01/cover-one.jpg");
+  });
+
+  it("leaves imageUrl undefined when the item embeds no image", () => {
+    const releases = parseFeed(FITGIRL_FEED_XML);
+    expect(releases[1]?.imageUrl).toBeUndefined();
+    expect(releases[2]?.imageUrl).toBeUndefined();
+  });
+
+  it("ignores non-http image sources", () => {
+    const xml = `<rss><channel><item>
+      <title>Data URI Cover</title>
+      <guid>https://fitgirl-repacks.site/?p=9</guid>
+      <content:encoded><![CDATA[<img src="data:image/gif;base64,R0lGOD" />]]></content:encoded>
+    </item></channel></rss>`;
+    expect(parseFeed(xml)[0]?.imageUrl).toBeUndefined();
+  });
+
+  it("decodes entities inside the image URL", () => {
+    const xml = `<rss><channel><item>
+      <title>Entity Cover</title>
+      <guid>https://fitgirl-repacks.site/?p=10</guid>
+      <content:encoded><![CDATA[<img src="https://img.example/a.jpg?w=1&amp;h=2" />]]></content:encoded>
+    </item></channel></rss>`;
+    expect(parseFeed(xml)[0]?.imageUrl).toBe("https://img.example/a.jpg?w=1&h=2");
+  });
+
+  it("still keeps embedded markup out of the extracted fields", () => {
+    const releases = parseFeed(FITGIRL_FEED_XML);
     expect(releases[0]?.link).toBe("https://fitgirl-repacks.site/silent-hills-echo/");
   });
 
