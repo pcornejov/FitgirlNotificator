@@ -16,12 +16,19 @@ import {
   fetchLatestReleases,
 } from "./feed";
 import {
+  type ChannelName,
+  type Notifier,
+  NotifierConfigError,
+  createNotifier,
+  resolveChannel,
+} from "./notifier";
+import type { SendOptions } from "./notify";
+import {
   DEFAULT_SEEN_TTL_DAYS,
   type SeenReleasesKV,
   filterUnseen,
   markSeen,
 } from "./store";
-import { type SendOptions, sendWhatsAppNotification } from "./whatsapp";
 
 export interface Env {
   /** KV namespace holding the ids of releases already notified. */
@@ -32,8 +39,12 @@ export interface Env {
   MAX_NOTIFICATIONS_PER_RUN?: string | number;
   SEEN_TTL_DAYS?: string | number;
   USER_AGENT?: string;
+  /** Active channel: "telegram" (default) or "callmebot". */
+  NOTIFIER?: string;
 
   // secrets (wrangler secret put)
+  TELEGRAM_BOT_TOKEN?: string;
+  TELEGRAM_CHAT_ID?: string;
   CALLMEBOT_PHONE?: string;
   CALLMEBOT_API_KEY?: string;
 }
@@ -41,6 +52,7 @@ export interface Env {
 export const DEFAULT_MAX_NOTIFICATIONS_PER_RUN = 5;
 
 export interface RunResult {
+  channel: ChannelName;
   fetched: number;
   unseen: number;
   selected: number;
@@ -50,6 +62,7 @@ export interface RunResult {
 
 export interface DryRunResult {
   dryRun: true;
+  channel: ChannelName;
   feedUrl: string;
   maxNotificationsPerRun: number;
   fetched: number;
@@ -90,13 +103,8 @@ export async function runNotifier(
   env: Env,
   sendOptions: SendOptions = {},
 ): Promise<RunResult> {
-  const phone = env.CALLMEBOT_PHONE ?? "";
-  const apiKey = env.CALLMEBOT_API_KEY ?? "";
-  if (phone === "" || apiKey === "") {
-    throw new Error(
-      "CALLMEBOT_PHONE and CALLMEBOT_API_KEY must be configured via `wrangler secret put`",
-    );
-  }
+  // Throws on a bad channel or missing credentials, before any KV write.
+  const notifier: Notifier = createNotifier(env);
 
   const maxPerRun = parsePositiveInt(
     env.MAX_NOTIFICATIONS_PER_RUN,
@@ -110,6 +118,7 @@ export async function runNotifier(
   const selected = unseen.slice(0, maxPerRun);
 
   const result: RunResult = {
+    channel: notifier.channel,
     fetched: releases.length,
     unseen: unseen.length,
     selected: selected.length,
@@ -119,11 +128,13 @@ export async function runNotifier(
 
   for (const release of selected) {
     try {
-      await sendWhatsAppNotification(phone, apiKey, release, sendOptions);
+      await notifier.send(release, sendOptions);
     } catch (error) {
       // Not marked as seen: it will be retried on the next run.
       result.failed.push({ id: release.id, error: errorMessage(error) });
-      console.error(`WhatsApp delivery failed for ${release.id}: ${errorMessage(error)}`);
+      console.error(
+        `${notifier.channel} delivery failed for ${release.id}: ${errorMessage(error)}`,
+      );
       continue;
     }
 
@@ -140,7 +151,7 @@ export async function runNotifier(
   return result;
 }
 
-/** Dry run: read-only, never writes KV and never calls the WhatsApp API. */
+/** Dry run: read-only, never writes KV and never calls the notification API. */
 export async function dryRun(env: Env): Promise<DryRunResult> {
   const maxPerRun = parsePositiveInt(
     env.MAX_NOTIFICATIONS_PER_RUN,
@@ -154,6 +165,7 @@ export async function dryRun(env: Env): Promise<DryRunResult> {
 
   return {
     dryRun: true,
+    channel: resolveChannel(env.NOTIFIER),
     feedUrl,
     maxNotificationsPerRun: maxPerRun,
     fetched: releases.length,
@@ -175,7 +187,7 @@ export default {
     try {
       const result = await runNotifier(env);
       console.log(
-        `cron ${event.cron}: fetched=${result.fetched} unseen=${result.unseen} ` +
+        `cron ${event.cron} [${result.channel}]: fetched=${result.fetched} unseen=${result.unseen} ` +
           `sent=${result.sent.length} failed=${result.failed.length}`,
       );
     } catch (error) {
@@ -194,16 +206,23 @@ export default {
       try {
         return json(await dryRun(env));
       } catch (error) {
-        return json({ error: errorMessage(error) }, 502);
+        // A misconfigured channel is our fault (500); a broken feed is upstream (502).
+        const status = error instanceof NotifierConfigError ? 500 : 502;
+        return json({ error: errorMessage(error) }, status);
       }
     }
 
     if (url.pathname === "/" || url.pathname === "") {
-      return json({
-        service: "fitgirl-notificator",
-        cron: "*/15 * * * *",
-        endpoints: { dryRun: "GET /test" },
-      });
+      try {
+        return json({
+          service: "fitgirl-notificator",
+          cron: "*/15 * * * *",
+          channel: resolveChannel(env.NOTIFIER),
+          endpoints: { dryRun: "GET /test" },
+        });
+      } catch (error) {
+        return json({ error: errorMessage(error) }, 500);
+      }
     }
 
     return json({ error: "Not found" }, 404);

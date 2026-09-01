@@ -1,8 +1,8 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Release } from "../src/feed";
+import { NotificationError } from "../src/notify";
 import {
   CALLMEBOT_ENDPOINT,
-  WhatsAppError,
   buildRequestUrl,
   formatMessage,
   sendWhatsAppNotification,
@@ -97,9 +97,9 @@ describe("sendWhatsAppNotification", () => {
     }).catch((e: unknown) => e);
 
     expect(fetchMock).toHaveBeenCalledTimes(2);
-    expect(error).toBeInstanceOf(WhatsAppError);
-    expect((error as WhatsAppError).status).toBe(503);
-    expect((error as WhatsAppError).attempts).toBe(2);
+    expect(error).toBeInstanceOf(NotificationError);
+    expect((error as NotificationError).status).toBe(503);
+    expect((error as NotificationError).attempts).toBe(2);
   });
 
   it("does NOT retry on a 400", async () => {
@@ -112,8 +112,8 @@ describe("sendWhatsAppNotification", () => {
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(sleep).not.toHaveBeenCalled();
-    expect(error).toBeInstanceOf(WhatsAppError);
-    expect((error as WhatsAppError).status).toBe(400);
+    expect(error).toBeInstanceOf(NotificationError);
+    expect((error as NotificationError).status).toBe(400);
   });
 
   it("does NOT retry on a 403 (bad api key)", async () => {
@@ -121,7 +121,7 @@ describe("sendWhatsAppNotification", () => {
 
     await expect(
       sendWhatsAppNotification(PHONE, API_KEY, RELEASE, { sleep: async () => {} }),
-    ).rejects.toBeInstanceOf(WhatsAppError);
+    ).rejects.toBeInstanceOf(NotificationError);
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
@@ -140,7 +140,7 @@ describe("sendWhatsAppNotification", () => {
 
     await expect(
       sendWhatsAppNotification("", API_KEY, RELEASE),
-    ).rejects.toBeInstanceOf(WhatsAppError);
+    ).rejects.toBeInstanceOf(NotificationError);
     expect(fetchMock).not.toHaveBeenCalled();
   });
 });

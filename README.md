@@ -2,8 +2,14 @@
 
 Cloudflare Worker que revisa cada 15 minutos el feed RSS oficial de
 [FitGirl Repacks](https://fitgirl-repacks.site/feed/), detecta releases nuevos y
-envía una alerta por WhatsApp con el título del juego y el enlace directo,
-usando la API de [CallMeBot](https://www.callmebot.com/blog/free-api-whatsapp-messages/).
+envía una alerta con el título del juego y el enlace directo.
+
+Soporta dos canales, intercambiables con la variable `NOTIFIER`:
+
+| `NOTIFIER` | Canal | Notas |
+| --- | --- | --- |
+| `telegram` (default) | [Telegram Bot API](https://core.telegram.org/bots/api) | Gratis, sin lista de espera, API oficial. |
+| `callmebot` | WhatsApp vía [CallMeBot](https://www.callmebot.com/blog/free-api-whatsapp-messages/) | Gratis, pero sujeto a que el bot tenga cupos libres. |
 
 - Sin dependencias de runtime: `fetch` nativo del runtime de Workers y un parser
   RSS propio basado en expresiones regulares.
@@ -20,7 +26,7 @@ usando la API de [CallMeBot](https://www.callmebot.com/blog/free-api-whatsapp-me
 cron */15  →  scheduled()  →  fetchLatestReleases()   src/feed.ts      (RSS → Release[])
                            →  filterUnseen(KV)        src/store.ts     (descarta ya notificados)
                            →  slice(MAX_NOTIFICATIONS_PER_RUN)
-                           →  sendWhatsAppNotification() src/whatsapp.ts (CallMeBot + 1 reintento)
+                           →  notifier.send()          src/notifier.ts  (Telegram o CallMeBot)
                            →  markSeen(KV, TTL)       src/store.ts     (solo tras envío OK)
 ```
 
@@ -28,7 +34,10 @@ cron */15  →  scheduled()  →  fetchLatestReleases()   src/feed.ts      (RSS 
 | --- | --- |
 | `src/feed.ts` | Descarga y parseo del RSS. Limpia CDATA y entidades HTML. Lanza `FeedError` en 4xx/5xx o fallo de red. |
 | `src/store.ts` | `filterUnseen` / `markSeen` sobre el namespace KV `SEEN_RELEASES`. |
-| `src/whatsapp.ts` | `sendWhatsAppNotification` con `encodeURIComponent`, 1 reintento con backoff de 2 s ante 5xx/timeout, sin reintento ante 4xx. |
+| `src/notify.ts` | Transporte común: 1 reintento con backoff de 2 s ante 5xx/408/429/timeout, sin reintento ante 4xx, `NotificationError` tipado. |
+| `src/telegram.ts` | Envío por Bot API (`sendMessage`, `parse_mode=HTML`). |
+| `src/whatsapp.ts` | Envío por CallMeBot. |
+| `src/notifier.ts` | Interfaz `Notifier` y selección de canal según `NOTIFIER`. |
 | `src/index.ts` | Handlers `scheduled` (cron) y `fetch` (dry-run `GET /test`). |
 
 ### Comportamiento a prueba de fallos
@@ -44,17 +53,49 @@ cron */15  →  scheduled()  →  fetchLatestReleases()   src/feed.ts      (RSS 
 
 ## Requisitos previos
 
-1. Node.js 18+ y una cuenta de Cloudflare (el free tier alcanza de sobra).
-2. **Activar el bot de CallMeBot** (paso obligatorio y por única vez, desde el
-   teléfono que va a recibir las alertas):
-   - Agrega a tus contactos de WhatsApp el número del bot publicado en la
-     [página oficial de CallMeBot](https://www.callmebot.com/blog/free-api-whatsapp-messages/)
-     (el número puede cambiar, siempre tómalo desde ahí).
-   - Envíale el mensaje: `I allow callmebot to send me messages`
-   - El bot responde con tu **API key** personal. Guárdala: es el valor de
-     `CALLMEBOT_API_KEY`.
-   - Tu número en formato internacional y sin espacios (ej. `+<código-país><número>`) es
-     el valor de `CALLMEBOT_PHONE`.
+Node.js 18+ y una cuenta de Cloudflare (el free tier alcanza de sobra), más las
+credenciales del canal que vayas a usar.
+
+### Opción A — Telegram (recomendada)
+
+1. En Telegram, escribe a [@BotFather](https://t.me/BotFather) y envía `/newbot`.
+2. Elige un nombre y un username terminado en `bot`. BotFather responde con el
+   **token** (formato `123456789:AAH...`): ese es `TELEGRAM_BOT_TOKEN`.
+3. Abre una conversación con **tu propio bot** y envíale cualquier mensaje
+   (ej. `hola`). Sin ese primer mensaje, Telegram no permite que el bot te
+   escriba.
+4. Obtén tu `TELEGRAM_CHAT_ID`:
+
+   ```bash
+   curl -s "https://api.telegram.org/bot<TU_TOKEN>/getUpdates" | grep -o '"chat":{"id":[-0-9]*'
+   ```
+
+   Devuelve algo como `"chat":{"id":987654321`. Ese número es tu chat id (si es
+   un grupo, viene en negativo: incluye el signo `-`).
+
+5. Verifica de punta a punta antes de tocar Cloudflare:
+
+   ```bash
+   curl -s "https://api.telegram.org/bot<TU_TOKEN>/sendMessage?chat_id=<TU_CHAT_ID>&text=prueba%20fitgirl"
+   ```
+
+   Si te llega "prueba fitgirl" por Telegram, las credenciales están bien.
+
+### Opción B — WhatsApp vía CallMeBot
+
+Requiere que el bot tenga cupos libres; cuando está lleno, su página oculta el
+número y hay que esperar. Desde el teléfono que recibirá las alertas:
+
+1. Agrega a tus contactos de WhatsApp el número del bot publicado en la
+   [página oficial de CallMeBot](https://www.callmebot.com/blog/free-api-whatsapp-messages/)
+   (el número puede cambiar, siempre tómalo desde ahí).
+2. Envíale el mensaje: `I allow callmebot to send me messages`
+3. El bot responde con tu **API key** personal: es el valor de `CALLMEBOT_API_KEY`.
+   Si no llega en 2 minutos, hay que reintentar 24 h después.
+4. Tu número con código de país y **sin el `+`** (ej. `56900000000`) es el valor
+   de `CALLMEBOT_PHONE`. El `+` se interpreta como espacio en una query string;
+   guardarlo solo con dígitos evita cualquier ambigüedad.
+5. Recuerda poner `NOTIFIER = "callmebot"` en `wrangler.toml`.
 
 ---
 
@@ -85,10 +126,19 @@ Copia ese `id` (y el `preview_id` si creaste el preview) dentro de
 `<REPLACE_WITH_YOUR_KV_NAMESPACE_ID>`.
 
 ```bash
-# 4. Cargar los secrets (NUNCA van en wrangler.toml ni en el código)
-npx wrangler secret put CALLMEBOT_PHONE     # ej. +<código-país><número>
-npx wrangler secret put CALLMEBOT_API_KEY   # la key que te dio el bot
+# 4. Cargar los secrets del canal activo (NUNCA van en wrangler.toml ni en el código)
+
+# Si NOTIFIER = "telegram"
+npx wrangler secret put TELEGRAM_BOT_TOKEN
+npx wrangler secret put TELEGRAM_CHAT_ID
+
+# Si NOTIFIER = "callmebot"
+npx wrangler secret put CALLMEBOT_PHONE
+npx wrangler secret put CALLMEBOT_API_KEY
 ```
+
+Solo hacen falta los secrets del canal activo: el Worker no valida las
+credenciales del canal que no está en uso.
 
 ---
 
@@ -98,6 +148,7 @@ Variables públicas (`[vars]` en `wrangler.toml`):
 
 | Variable | Default | Descripción |
 | --- | --- | --- |
+| `NOTIFIER` | `telegram` | Canal activo: `telegram` o `callmebot`. |
 | `FEED_URL` | `https://fitgirl-repacks.site/feed/` | Feed RSS a consultar. |
 | `MAX_NOTIFICATIONS_PER_RUN` | `5` | Tope de mensajes por ejecución del cron. |
 | `SEEN_TTL_DAYS` | `30` | Días que un release permanece marcado como visto en KV. |
@@ -105,10 +156,12 @@ Variables públicas (`[vars]` en `wrangler.toml`):
 
 Secrets (vía `wrangler secret put`, **nunca** versionados):
 
-| Secret | Descripción |
-| --- | --- |
-| `CALLMEBOT_PHONE` | Teléfono destino en formato internacional. |
-| `CALLMEBOT_API_KEY` | API key entregada por el bot de CallMeBot. |
+| Secret | Canal | Descripción |
+| --- | --- | --- |
+| `TELEGRAM_BOT_TOKEN` | `telegram` | Token que entrega @BotFather. |
+| `TELEGRAM_CHAT_ID` | `telegram` | Id del chat destino (negativo si es un grupo). |
+| `CALLMEBOT_PHONE` | `callmebot` | Teléfono destino, con código de país y sin `+`. |
+| `CALLMEBOT_API_KEY` | `callmebot` | API key entregada por el bot de CallMeBot. |
 
 ---
 
@@ -124,8 +177,8 @@ Para el desarrollo local, los secrets se cargan desde un archivo `.dev.vars`
 (ignorado por git) con el mismo formato de un `.env`:
 
 ```
-CALLMEBOT_PHONE=+00000000000
-CALLMEBOT_API_KEY=your-callmebot-key
+TELEGRAM_BOT_TOKEN=123456789:your-bot-token
+TELEGRAM_CHAT_ID=000000000
 ```
 
 ### Dry-run
@@ -137,11 +190,13 @@ curl http://localhost:8787/test
 ```
 
 Devuelve un JSON con los releases que **se habrían** notificado, sin llamar a
-la API de WhatsApp ni escribir en KV:
+la API del canal ni escribir en KV (funciona incluso antes de cargar los
+secrets):
 
 ```json
 {
   "dryRun": true,
+  "channel": "telegram",
   "feedUrl": "https://fitgirl-repacks.site/feed/",
   "maxNotificationsPerRun": 5,
   "fetched": 10,
@@ -186,9 +241,11 @@ El Cron Trigger `*/15 * * * *` queda activo automáticamente tras el deploy.
 ## Notas
 
 - El Worker solo consume el feed RSS oficial; no hace scraping de páginas HTML.
+- Cambiar de canal es cambiar `NOTIFIER` en `wrangler.toml`, cargar los secrets
+  correspondientes y volver a desplegar. No hay cambios de código.
 - La primera ejecución notificará todos los releases presentes en el feed (hasta
   `MAX_NOTIFICATIONS_PER_RUN`). Para partir en silencio, ejecuta primero el
   dry-run y precarga las claves con
   `npx wrangler kv key put --binding SEEN_RELEASES "<id-del-release>" "seen"`.
 - CallMeBot es un servicio gratuito de terceros pensado para uso personal;
-  aplica límites de tasa razonables.
+  aplica límites de tasa razonables. Si su bot está lleno, usa Telegram.
