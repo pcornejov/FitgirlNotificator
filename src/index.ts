@@ -21,8 +21,8 @@ import {
   type ChannelName,
   type Notifier,
   NotifierConfigError,
-  createNotifier,
-  resolveChannel,
+  createNotifiers,
+  resolveChannels,
 } from "./notifier";
 import type { SendOptions } from "./notify";
 import {
@@ -70,7 +70,7 @@ export const DEFAULT_MAX_NOTIFICATIONS_PER_RUN = 5;
 export const NOTIFY_INTERVAL_MS = 1_200;
 
 export interface RunResult {
-  channel: ChannelName;
+  channels: ChannelName[];
   fetched: number;
   /** Entries dropped for not being game releases. */
   filtered: number;
@@ -79,12 +79,12 @@ export interface RunResult {
   sent: string[];
   /** Subset of `sent` that were updates to a previously notified repack. */
   updated: string[];
-  failed: Array<{ id: string; error: string }>;
+  failed: Array<{ id: string; channel?: ChannelName; error: string }>;
 }
 
 export interface DryRunResult {
   dryRun: true;
-  channel: ChannelName;
+  channels: ChannelName[];
   feedUrl: string;
   requiredCategory: string;
   maxNotificationsPerRun: number;
@@ -136,7 +136,7 @@ export async function runNotifier(
     new Promise((resolve) => setTimeout(resolve, ms)),
 ): Promise<RunResult> {
   // Throws on a bad channel or missing credentials, before any KV write.
-  const notifier: Notifier = createNotifier(env);
+  const notifiers: Notifier[] = createNotifiers(env);
 
   const maxPerRun = parsePositiveInt(
     env.MAX_NOTIFICATIONS_PER_RUN,
@@ -153,7 +153,7 @@ export async function runNotifier(
   const selected = unseen.slice(0, maxPerRun);
 
   const result: RunResult = {
-    channel: notifier.channel,
+    channels: notifiers.map((n) => n.channel),
     fetched: fetched.length,
     filtered: fetched.length - releases.length,
     unseen: unseen.length,
@@ -170,17 +170,32 @@ export async function runNotifier(
       await pause(NOTIFY_INTERVAL_MS);
     }
 
-    try {
-      await notifier.send(release, isUpdate, sendOptions);
-    } catch (error) {
-      // Not marked as seen: it will be retried on the next run.
-      result.failed.push({ id: release.id, error: errorMessage(error) });
-      console.error(
-        `${notifier.channel} delivery failed for ${release.id}: ${errorMessage(error)}`,
-      );
+    // Every channel is attempted; one failing must not stop the others.
+    let delivered = 0;
+    for (const notifier of notifiers) {
+      try {
+        await notifier.send(release, isUpdate, sendOptions);
+        delivered += 1;
+      } catch (error) {
+        result.failed.push({
+          id: release.id,
+          channel: notifier.channel,
+          error: errorMessage(error),
+        });
+        console.error(
+          `${notifier.channel} delivery failed for ${release.id}: ${errorMessage(error)}`,
+        );
+      }
+    }
+
+    if (delivered === 0) {
+      // Nowhere to be seen: leave it unmarked so the next run retries it.
       continue;
     }
 
+    // Marked once at least one channel delivered. Holding the mark back until
+    // every channel succeeds would make a persistently broken channel resend
+    // the same release on the working ones every 15 minutes.
     try {
       await markSeen(release, env.SEEN_RELEASES, ttlDays);
       result.sent.push(release.id);
@@ -213,7 +228,7 @@ export async function dryRun(env: Env): Promise<DryRunResult> {
 
   return {
     dryRun: true,
-    channel: resolveChannel(env.NOTIFIER),
+    channels: resolveChannels(env.NOTIFIER),
     feedUrl,
     requiredCategory,
     maxNotificationsPerRun: maxPerRun,
@@ -237,7 +252,7 @@ export default {
     try {
       const result = await runNotifier(env);
       console.log(
-        `cron ${event.cron} [${result.channel}]: fetched=${result.fetched} ` +
+        `cron ${event.cron} [${result.channels.join("+")}]: fetched=${result.fetched} ` +
           `filtered=${result.filtered} unseen=${result.unseen} ` +
           `sent=${result.sent.length} updates=${result.updated.length} ` +
           `failed=${result.failed.length}`,
@@ -269,7 +284,7 @@ export default {
         return json({
           service: "fitgirl-notificator",
           cron: "*/15 * * * *",
-          channel: resolveChannel(env.NOTIFIER),
+          channels: resolveChannels(env.NOTIFIER),
           endpoints: { dryRun: "GET /test" },
         });
       } catch (error) {

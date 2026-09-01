@@ -4,7 +4,9 @@ import {
   DEFAULT_CHANNEL,
   NotifierConfigError,
   createNotifier,
+  createNotifiers,
   resolveChannel,
+  resolveChannels,
 } from "../src/notifier";
 
 const RELEASE: Release = {
@@ -88,5 +90,69 @@ describe("createNotifier", () => {
   it("does not require the credentials of the inactive channel", () => {
     expect(() => createNotifier({ NOTIFIER: "telegram", ...TELEGRAM_ENV })).not.toThrow();
     expect(() => createNotifier({ NOTIFIER: "callmebot", ...CALLMEBOT_ENV })).not.toThrow();
+  });
+});
+
+describe("resolveChannels", () => {
+  it("defaults to the single default channel", () => {
+    expect(resolveChannels(undefined)).toEqual([DEFAULT_CHANNEL]);
+    expect(resolveChannels("  ")).toEqual([DEFAULT_CHANNEL]);
+  });
+
+  it("parses a comma-separated list, preserving order", () => {
+    expect(resolveChannels("callmebot,telegram")).toEqual(["callmebot", "telegram"]);
+  });
+
+  it("tolerates spacing and casing", () => {
+    expect(resolveChannels(" Telegram , CALLMEBOT ")).toEqual(["telegram", "callmebot"]);
+  });
+
+  it("collapses duplicates", () => {
+    expect(resolveChannels("telegram,telegram")).toEqual(["telegram"]);
+  });
+
+  it("rejects a list containing an unknown channel", () => {
+    expect(() => resolveChannels("telegram,signal")).toThrow(NotifierConfigError);
+  });
+});
+
+describe("createNotifiers", () => {
+  it("builds one notifier per configured channel", () => {
+    const notifiers = createNotifiers({
+      NOTIFIER: "telegram,callmebot",
+      ...TELEGRAM_ENV,
+      ...CALLMEBOT_ENV,
+    });
+
+    expect(notifiers.map((n) => n.channel)).toEqual(["telegram", "callmebot"]);
+  });
+
+  it("validates every channel's credentials up front", () => {
+    // Telegram is configured, CallMeBot is not: the whole fan-out is refused
+    // rather than silently dropping a channel.
+    expect(() =>
+      createNotifiers({ NOTIFIER: "telegram,callmebot", ...TELEGRAM_ENV }),
+    ).toThrow(/CALLMEBOT_PHONE and CALLMEBOT_API_KEY/);
+  });
+
+  it("delivers one release to both endpoints", async () => {
+    const fetchMock = vi.fn(
+      async (_input: string | URL) =>
+        new Response(JSON.stringify({ ok: true }), { status: 200 }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const notifiers = createNotifiers({
+      NOTIFIER: "telegram,callmebot",
+      ...TELEGRAM_ENV,
+      ...CALLMEBOT_ENV,
+    });
+    for (const notifier of notifiers) {
+      await notifier.send(RELEASE, false, { sleep: async () => {} });
+    }
+
+    const urls = fetchMock.mock.calls.map((call) => String(call[0]));
+    expect(urls.some((u) => u.includes("api.telegram.org"))).toBe(true);
+    expect(urls.some((u) => u.includes("api.callmebot.com"))).toBe(true);
   });
 });

@@ -137,7 +137,7 @@ describe("runNotifier", () => {
 
     const result = await runNotifier(env, { sleep: async () => {} }, async () => {});
 
-    expect(result.channel).toBe("telegram");
+    expect(result.channels).toEqual(["telegram"]);
     expect(result.fetched).toBe(4);
     expect(result.filtered).toBe(2);
     expect(result.sent).toEqual(RELEASE_IDS);
@@ -252,7 +252,7 @@ describe("channel selection", () => {
 
     const result = await runNotifier(env, { sleep: async () => {} }, async () => {});
 
-    expect(result.channel).toBe("callmebot");
+    expect(result.channels).toEqual(["callmebot"]);
     expect(notified()).toHaveLength(2);
     expect(notified().every((s) => s.url.href.startsWith(CALLMEBOT_ENDPOINT))).toBe(true);
     expect([...kv.entries.keys()].sort()).toEqual(keysFor(RELEASE_IDS));
@@ -264,7 +264,7 @@ describe("channel selection", () => {
     delete env.TELEGRAM_CHAT_ID;
 
     await expect(runNotifier(env, { sleep: async () => {} }, async () => {})).resolves.toMatchObject({
-      channel: "callmebot",
+      channels: ["callmebot"],
     });
     expect(notified()).toHaveLength(2);
   });
@@ -277,7 +277,7 @@ describe("dryRun", () => {
     const result = await dryRun(env);
 
     expect(result.dryRun).toBe(true);
-    expect(result.channel).toBe("telegram");
+    expect(result.channels).toEqual(["telegram"]);
     expect(result.fetched).toBe(4);
     expect(result.filtered).toBe(2);
     expect(result.requiredCategory).toBe("Lossless Repack");
@@ -344,7 +344,7 @@ describe("worker handlers", () => {
     const response = await worker.fetch(new Request("https://worker.dev/"), env);
 
     expect(response.status).toBe(200);
-    expect(await response.json()).toMatchObject({ channel: "callmebot" });
+    expect(await response.json()).toMatchObject({ channels: ["callmebot"] });
   });
 
   it("rejects non-GET requests to /test", async () => {
@@ -532,5 +532,91 @@ describe("updated repacks", () => {
 
     expect(second.sent).toEqual([]);
     expect(notified()).toHaveLength(2);
+  });
+});
+
+describe("multi-channel delivery", () => {
+  const BOTH: Partial<Env> = {
+    NOTIFIER: "telegram,callmebot",
+    ...CALLMEBOT_SECRETS,
+  };
+
+  function byChannel(sent: Sent[]): { telegram: Sent[]; callmebot: Sent[] } {
+    return {
+      telegram: sent.filter((s) => s.url.origin === TELEGRAM_API_BASE),
+      callmebot: sent.filter((s) => s.url.href.startsWith(CALLMEBOT_ENDPOINT)),
+    };
+  }
+
+  it("sends every release to both channels", async () => {
+    const { env, kv, notified } = scenario(BOTH);
+
+    const result = await runNotifier(env, { sleep: async () => {} }, async () => {});
+
+    expect(result.channels).toEqual(["telegram", "callmebot"]);
+    expect(result.sent).toEqual(RELEASE_IDS);
+    const split = byChannel(notified());
+    expect(split.telegram).toHaveLength(2);
+    expect(split.callmebot).toHaveLength(2);
+    expect([...kv.entries.keys()].sort()).toEqual(keysFor(RELEASE_IDS));
+  });
+
+  it("keeps delivering on one channel when the other fails", async () => {
+    const { env, kv, notified } = scenario(BOTH, (sent) =>
+      sent.url.href.startsWith(CALLMEBOT_ENDPOINT) ? 400 : 200,
+    );
+
+    const result = await runNotifier(env, { sleep: async () => {} }, async () => {});
+
+    expect(byChannel(notified()).telegram).toHaveLength(2);
+    // Delivered somewhere, so it is marked and never resent on Telegram.
+    expect(result.sent).toEqual(RELEASE_IDS);
+    expect(result.failed.map((f) => f.channel)).toEqual(["callmebot", "callmebot"]);
+    expect([...kv.entries.keys()].sort()).toEqual(keysFor(RELEASE_IDS));
+  });
+
+  it("does not resend on the healthy channel while the other stays broken", async () => {
+    const { env, notified } = scenario(BOTH, (sent) =>
+      sent.url.href.startsWith(CALLMEBOT_ENDPOINT) ? 400 : 200,
+    );
+
+    await runNotifier(env, { sleep: async () => {} }, async () => {});
+    const second = await runNotifier(env, { sleep: async () => {} }, async () => {});
+
+    expect(second.sent).toEqual([]);
+    expect(byChannel(notified()).telegram).toHaveLength(2);
+  });
+
+  it("leaves a release unmarked only when every channel fails", async () => {
+    const { env, kv } = scenario(BOTH, () => 400);
+
+    const result = await runNotifier(env, { sleep: async () => {} }, async () => {});
+
+    expect(result.sent).toEqual([]);
+    expect(result.failed).toHaveLength(4); // two releases x two channels
+    expect(kv.putCalls).toBe(0);
+
+    // Both channels recover: the releases go out on the next run.
+    const { env: healthy } = scenario(BOTH);
+    healthy.SEEN_RELEASES = kv;
+    const second = await runNotifier(healthy, { sleep: async () => {} }, async () => {});
+    expect(second.sent).toEqual(RELEASE_IDS);
+  });
+
+  it("reports both channels in the dry run", async () => {
+    const { env } = scenario(BOTH);
+
+    await expect(dryRun(env)).resolves.toMatchObject({
+      channels: ["telegram", "callmebot"],
+    });
+  });
+
+  it("refuses to run when one of the two channels lacks credentials", async () => {
+    const { env, notified } = scenario({ NOTIFIER: "telegram,callmebot" });
+
+    await expect(runNotifier(env, {}, async () => {})).rejects.toThrow(
+      /CALLMEBOT_PHONE and CALLMEBOT_API_KEY/,
+    );
+    expect(notified()).toHaveLength(0);
   });
 });

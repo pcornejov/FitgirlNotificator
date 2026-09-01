@@ -34,17 +34,48 @@ export class NotifierConfigError extends Error {
   }
 }
 
-export function resolveChannel(value: string | undefined): ChannelName {
-  const name = (value ?? "").trim().toLowerCase();
-  if (name === "") {
-    return DEFAULT_CHANNEL;
-  }
+function parseChannel(name: string): ChannelName {
   if (name === "telegram" || name === "callmebot") {
     return name;
   }
   throw new NotifierConfigError(
-    `Unknown NOTIFIER "${value}". Supported channels: telegram, callmebot`,
+    `Unknown NOTIFIER "${name}". Supported channels: telegram, callmebot`,
   );
+}
+
+export function resolveChannel(value: string | undefined): ChannelName {
+  return resolveChannels(value)[0] as ChannelName;
+}
+
+/**
+ * Parses `NOTIFIER` into the list of active channels.
+ *
+ * Accepts one name or a comma-separated list, so a release can be delivered to
+ * several places at once. Duplicates collapse and order is preserved.
+ */
+export function resolveChannels(value: string | undefined): ChannelName[] {
+  const raw = (value ?? "").trim();
+  if (raw === "") {
+    return [DEFAULT_CHANNEL];
+  }
+
+  const channels: ChannelName[] = [];
+  for (const part of raw.split(",")) {
+    const name = part.trim().toLowerCase();
+    if (name === "") {
+      continue;
+    }
+    const channel = parseChannel(name);
+    if (!channels.includes(channel)) {
+      channels.push(channel);
+    }
+  }
+
+  if (channels.length === 0) {
+    throw new NotifierConfigError(`NOTIFIER "${value}" names no channel`);
+  }
+
+  return channels;
 }
 
 /**
@@ -54,8 +85,20 @@ export function resolveChannel(value: string | undefined): ChannelName {
  * before any KV write happens.
  */
 export function createNotifier(config: NotifierConfig): Notifier {
-  const channel = resolveChannel(config.NOTIFIER);
+  return buildNotifier(resolveChannel(config.NOTIFIER), config);
+}
 
+/**
+ * Builds one notifier per configured channel.
+ *
+ * Every channel's credentials are validated up front: a half-configured fan-out
+ * fails the run before any KV write rather than silently dropping a channel.
+ */
+export function createNotifiers(config: NotifierConfig): Notifier[] {
+  return resolveChannels(config.NOTIFIER).map((channel) => buildNotifier(channel, config));
+}
+
+function buildNotifier(channel: ChannelName, config: NotifierConfig): Notifier {
   if (channel === "telegram") {
     const token = config.TELEGRAM_BOT_TOKEN ?? "";
     const chatId = config.TELEGRAM_CHAT_ID ?? "";

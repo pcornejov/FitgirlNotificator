@@ -4,7 +4,8 @@ Cloudflare Worker que revisa cada 15 minutos el feed RSS oficial de
 [FitGirl Repacks](https://fitgirl-repacks.site/feed/), detecta releases nuevos y
 envía una alerta con el título del juego y el enlace directo.
 
-Soporta dos canales, intercambiables con la variable `NOTIFIER`:
+Soporta dos canales, seleccionables con la variable `NOTIFIER`. Puedes usar uno
+o los dos a la vez (`NOTIFIER = "telegram,callmebot"`):
 
 | `NOTIFIER` | Canal | Notas |
 | --- | --- | --- |
@@ -138,8 +139,10 @@ npx wrangler secret put CALLMEBOT_PHONE
 npx wrangler secret put CALLMEBOT_API_KEY
 ```
 
-Solo hacen falta los secrets del canal activo: el Worker no valida las
-credenciales del canal que no está en uso.
+Solo hacen falta los secrets de los canales activos: el Worker no valida las
+credenciales de un canal que no está en uso. Si `NOTIFIER` lista dos canales y
+a uno le faltan credenciales, la corrida aborta antes de escribir en KV, en vez
+de descartar ese canal en silencio.
 
 ---
 
@@ -149,7 +152,7 @@ Variables públicas (`[vars]` en `wrangler.toml`):
 
 | Variable | Default | Descripción |
 | --- | --- | --- |
-| `NOTIFIER` | `telegram` | Canal activo: `telegram` o `callmebot`. |
+| `NOTIFIER` | `telegram` | Canales activos: `telegram`, `callmebot`, o ambos separados por coma (`telegram,callmebot`). |
 | `FEED_URL` | `https://fitgirl-repacks.site/feed/` | Feed RSS a consultar. |
 | `REQUIRE_CATEGORY` | `Lossless Repack` | Solo se notifican posts en esta categoría. `""` desactiva el filtro. |
 | `MAX_NOTIFICATIONS_PER_RUN` | `5` | Tope de mensajes por ejecución del cron. |
@@ -254,8 +257,14 @@ El Cron Trigger `*/15 * * * *` queda activo automáticamente tras el deploy.
 - La portada de cada release viene en el propio feed (primer `<img>` de
   `content:encoded`). El Worker la descarga y la sube a Telegram, porque el
   host de imágenes rechaza a los fetchers de Telegram si se le pasa la URL.
-- Cambiar de canal es cambiar `NOTIFIER` en `wrangler.toml`, cargar los secrets
-  correspondientes y volver a desplegar. No hay cambios de código.
+- Cambiar de canal, o activar los dos, es cambiar `NOTIFIER` en `wrangler.toml`,
+  cargar los secrets correspondientes y volver a desplegar. No hay cambios de
+  código.
+- Con varios canales activos, un release se marca como visto en cuanto **al
+  menos uno** entrega. Retenerlo hasta que todos lo logren haría que un canal
+  averiado provocara reenvíos cada 15 minutos en los que sí funcionan. Si
+  fallan todos, no se marca y se reintenta en la corrida siguiente.
+- CallMeBot solo envía texto: las portadas llegan únicamente por Telegram.
 - La primera ejecución notificará todos los releases presentes en el feed (hasta
   `MAX_NOTIFICATIONS_PER_RUN`). Para partir en silencio, ejecuta primero el
   dry-run y precarga las claves con
