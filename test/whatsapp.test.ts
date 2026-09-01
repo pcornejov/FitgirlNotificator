@@ -67,7 +67,7 @@ describe("sendWhatsAppNotification", () => {
   it("performs a single GET request on success", async () => {
     const fetchMock = mockFetchSequence([{ status: 200 }]);
 
-    await sendWhatsAppNotification(PHONE, API_KEY, RELEASE, { sleep: async () => {} });
+    await sendWhatsAppNotification(PHONE, API_KEY, RELEASE, false, { sleep: async () => {} });
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
     const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
@@ -81,7 +81,7 @@ describe("sendWhatsAppNotification", () => {
     const fetchMock = mockFetchSequence([{ status: 500 }, { status: 200 }]);
     const sleep = vi.fn(async () => {});
 
-    await sendWhatsAppNotification(PHONE, API_KEY, RELEASE, {
+    await sendWhatsAppNotification(PHONE, API_KEY, RELEASE, false, {
       sleep,
       retryDelayMs: 2000,
     });
@@ -93,7 +93,7 @@ describe("sendWhatsAppNotification", () => {
   it("throws after the retry when the API keeps failing with 5xx", async () => {
     const fetchMock = mockFetchSequence([{ status: 500 }, { status: 503 }]);
 
-    const error = await sendWhatsAppNotification(PHONE, API_KEY, RELEASE, {
+    const error = await sendWhatsAppNotification(PHONE, API_KEY, RELEASE, false, {
       sleep: async () => {},
     }).catch((e: unknown) => e);
 
@@ -107,7 +107,7 @@ describe("sendWhatsAppNotification", () => {
     const fetchMock = mockFetchSequence([{ status: 400 }, { status: 200 }]);
     const sleep = vi.fn(async () => {});
 
-    const error = await sendWhatsAppNotification(PHONE, API_KEY, RELEASE, { sleep }).catch(
+    const error = await sendWhatsAppNotification(PHONE, API_KEY, RELEASE, false, { sleep }).catch(
       (e: unknown) => e,
     );
 
@@ -121,7 +121,7 @@ describe("sendWhatsAppNotification", () => {
     const fetchMock = mockFetchSequence([{ status: 403 }]);
 
     await expect(
-      sendWhatsAppNotification(PHONE, API_KEY, RELEASE, { sleep: async () => {} }),
+      sendWhatsAppNotification(PHONE, API_KEY, RELEASE, false, { sleep: async () => {} }),
     ).rejects.toBeInstanceOf(NotificationError);
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
@@ -130,7 +130,7 @@ describe("sendWhatsAppNotification", () => {
     const fetchMock = mockFetchSequence([new Error("The operation was aborted"), { status: 200 }]);
     const sleep = vi.fn(async () => {});
 
-    await sendWhatsAppNotification(PHONE, API_KEY, RELEASE, { sleep });
+    await sendWhatsAppNotification(PHONE, API_KEY, RELEASE, false, { sleep });
 
     expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(sleep).toHaveBeenCalledTimes(1);

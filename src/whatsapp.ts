@@ -15,8 +15,12 @@ export const CHANNEL = "callmebot";
 export { DEFAULT_RETRY_DELAY_MS, DEFAULT_TIMEOUT_MS, type SendOptions } from "./notify";
 
 /** The message body sent to WhatsApp for a release. */
-export function formatMessage(release: Release): string {
-  return `🎮 *Nuevo Release en FitGirl*\n\n${release.title}\n\n🔗 ${release.link}`;
+export function formatMessage(release: Release, isUpdate = false): string {
+  const heading = isUpdate
+    ? "🔄 *Repack actualizado en FitGirl*"
+    : "🎮 *Nuevo Release en FitGirl*";
+
+  return `${heading}\n\n${release.title}\n\n🔗 ${release.link}`;
 }
 
 /** Builds the fully encoded CallMeBot request URL. */
@@ -43,6 +47,7 @@ export async function sendWhatsAppNotification(
   phone: string,
   apiKey: string,
   release: Release,
+  isUpdate = false,
   options: SendOptions = {},
 ): Promise<void> {
   if (phone === "" || apiKey === "") {
@@ -50,7 +55,7 @@ export async function sendWhatsAppNotification(
   }
 
   await deliver(
-    { url: buildRequestUrl(phone, apiKey, formatMessage(release)) },
+    { url: buildRequestUrl(phone, apiKey, formatMessage(release, isUpdate)) },
     CHANNEL,
     options,
   );

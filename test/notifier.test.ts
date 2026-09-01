@@ -63,8 +63,8 @@ describe("createNotifier", () => {
     );
     vi.stubGlobal("fetch", fetchMock);
 
-    await createNotifier(TELEGRAM_ENV).send(RELEASE, { sleep: async () => {} });
-    await createNotifier({ NOTIFIER: "callmebot", ...CALLMEBOT_ENV }).send(RELEASE, {
+    await createNotifier(TELEGRAM_ENV).send(RELEASE, false, { sleep: async () => {} });
+    await createNotifier({ NOTIFIER: "callmebot", ...CALLMEBOT_ENV }).send(RELEASE, false, {
       sleep: async () => {},
     });
 

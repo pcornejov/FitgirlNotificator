@@ -77,6 +77,8 @@ export interface RunResult {
   unseen: number;
   selected: number;
   sent: string[];
+  /** Subset of `sent` that were updates to a previously notified repack. */
+  updated: string[];
   failed: Array<{ id: string; error: string }>;
 }
 
@@ -89,7 +91,7 @@ export interface DryRunResult {
   fetched: number;
   filtered: number;
   unseen: number;
-  wouldNotify: Release[];
+  wouldNotify: Array<Release & { isUpdate: boolean }>;
   skipped: number;
 }
 
@@ -157,16 +159,19 @@ export async function runNotifier(
     unseen: unseen.length,
     selected: selected.length,
     sent: [],
+    updated: [],
     failed: [],
   };
 
-  for (const [index, release] of selected.entries()) {
+  for (const [index, pending] of selected.entries()) {
+    const { release, isUpdate } = pending;
+
     if (index > 0) {
       await pause(NOTIFY_INTERVAL_MS);
     }
 
     try {
-      await notifier.send(release, sendOptions);
+      await notifier.send(release, isUpdate, sendOptions);
     } catch (error) {
       // Not marked as seen: it will be retried on the next run.
       result.failed.push({ id: release.id, error: errorMessage(error) });
@@ -177,8 +182,11 @@ export async function runNotifier(
     }
 
     try {
-      await markSeen(release.id, env.SEEN_RELEASES, ttlDays);
+      await markSeen(release, env.SEEN_RELEASES, ttlDays);
       result.sent.push(release.id);
+      if (isUpdate) {
+        result.updated.push(release.id);
+      }
     } catch (error) {
       // Delivered but not recorded: log loudly, a duplicate may follow.
       result.failed.push({ id: release.id, error: `KV write failed: ${errorMessage(error)}` });
@@ -212,7 +220,7 @@ export async function dryRun(env: Env): Promise<DryRunResult> {
     fetched: fetched.length,
     filtered: fetched.length - releases.length,
     unseen: unseen.length,
-    wouldNotify,
+    wouldNotify: wouldNotify.map((p) => ({ ...p.release, isUpdate: p.isUpdate })),
     skipped: unseen.length - wouldNotify.length,
   };
 }
@@ -231,7 +239,8 @@ export default {
       console.log(
         `cron ${event.cron} [${result.channel}]: fetched=${result.fetched} ` +
           `filtered=${result.filtered} unseen=${result.unseen} ` +
-          `sent=${result.sent.length} failed=${result.failed.length}`,
+          `sent=${result.sent.length} updates=${result.updated.length} ` +
+          `failed=${result.failed.length}`,
       );
     } catch (error) {
       // Feed or KV outage: nothing was written, the next run retries.

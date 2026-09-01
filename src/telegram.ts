@@ -27,12 +27,12 @@ export function escapeHtml(value: string): string {
  * HTML is used instead of MarkdownV2 because repack titles routinely contain
  * `-`, `.`, `(` and `)`, all of which MarkdownV2 would require escaping.
  */
-export function formatMessage(release: Release): string {
-  return (
-    `🎮 <b>Nuevo Release en FitGirl</b>\n\n` +
-    `${escapeHtml(release.title)}\n\n` +
-    `🔗 ${escapeHtml(release.link)}`
-  );
+export function formatMessage(release: Release, isUpdate = false): string {
+  const heading = isUpdate
+    ? "🔄 <b>Repack actualizado en FitGirl</b>"
+    : "🎮 <b>Nuevo Release en FitGirl</b>";
+
+  return `${heading}\n\n${escapeHtml(release.title)}\n\n🔗 ${escapeHtml(release.link)}`;
 }
 
 /** Builds the fully encoded sendMessage request URL. */
@@ -156,13 +156,14 @@ export async function sendTelegramNotification(
   botToken: string,
   chatId: string,
   release: Release,
+  isUpdate = false,
   options: SendOptions = {},
 ): Promise<void> {
   if (botToken === "" || chatId === "") {
     throw new NotificationError(CHANNEL, "Missing Telegram bot token or chat id", 0);
   }
 
-  const message = formatMessage(release);
+  const message = formatMessage(release, isUpdate);
   const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
 
   if (release.imageUrl !== undefined && release.imageUrl !== "") {

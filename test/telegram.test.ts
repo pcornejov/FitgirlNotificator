@@ -93,7 +93,7 @@ describe("sendTelegramNotification", () => {
   it("performs a single GET request on success", async () => {
     const fetchMock = mockFetchSequence([{ status: 200 }]);
 
-    await sendTelegramNotification(TOKEN, CHAT_ID, RELEASE, { sleep: async () => {} });
+    await sendTelegramNotification(TOKEN, CHAT_ID, RELEASE, false, { sleep: async () => {} });
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
     const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
@@ -105,7 +105,7 @@ describe("sendTelegramNotification", () => {
     const fetchMock = mockFetchSequence([{ status: 500 }, { status: 200 }]);
     const sleep = vi.fn(async () => {});
 
-    await sendTelegramNotification(TOKEN, CHAT_ID, RELEASE, { sleep, retryDelayMs: 2000 });
+    await sendTelegramNotification(TOKEN, CHAT_ID, RELEASE, false, { sleep, retryDelayMs: 2000 });
 
     expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(sleep).toHaveBeenCalledWith(2000);
@@ -117,7 +117,7 @@ describe("sendTelegramNotification", () => {
     ]);
     const sleep = vi.fn(async () => {});
 
-    const error = await sendTelegramNotification(TOKEN, CHAT_ID, RELEASE, { sleep }).catch(
+    const error = await sendTelegramNotification(TOKEN, CHAT_ID, RELEASE, false, { sleep }).catch(
       (e: unknown) => e,
     );
 
@@ -135,7 +135,7 @@ describe("sendTelegramNotification", () => {
     ]);
 
     await expect(
-      sendTelegramNotification(TOKEN, CHAT_ID, RELEASE, { sleep: async () => {} }),
+      sendTelegramNotification(TOKEN, CHAT_ID, RELEASE, false, { sleep: async () => {} }),
     ).rejects.toBeInstanceOf(NotificationError);
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
@@ -144,7 +144,7 @@ describe("sendTelegramNotification", () => {
     const fetchMock = mockFetchSequence([new Error("The operation was aborted"), { status: 200 }]);
     const sleep = vi.fn(async () => {});
 
-    await sendTelegramNotification(TOKEN, CHAT_ID, RELEASE, { sleep });
+    await sendTelegramNotification(TOKEN, CHAT_ID, RELEASE, false, { sleep });
 
     expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(sleep).toHaveBeenCalledTimes(1);
@@ -155,7 +155,7 @@ describe("sendTelegramNotification", () => {
       { status: 200, body: { ok: false, description: "chat not found" } },
     ]);
 
-    const error = await sendTelegramNotification(TOKEN, CHAT_ID, RELEASE, {
+    const error = await sendTelegramNotification(TOKEN, CHAT_ID, RELEASE, false, {
       sleep: async () => {},
     }).catch((e: unknown) => e);
 
@@ -172,7 +172,7 @@ describe("sendTelegramNotification", () => {
     );
 
     await expect(
-      sendTelegramNotification(TOKEN, CHAT_ID, RELEASE, { sleep: async () => {} }),
+      sendTelegramNotification(TOKEN, CHAT_ID, RELEASE, false, { sleep: async () => {} }),
     ).resolves.toBeUndefined();
   });
 
@@ -238,7 +238,7 @@ describe("cover images", () => {
     const fetchMock = mockCoverFlow();
     vi.spyOn(console, "warn").mockImplementation(() => {});
 
-    await sendTelegramNotification(TOKEN, CHAT_ID, WITH_IMAGE, { sleep: async () => {} });
+    await sendTelegramNotification(TOKEN, CHAT_ID, WITH_IMAGE, false, { sleep: async () => {} });
 
     const urls = callUrls(fetchMock);
     expect(urls[0]).toBe(COVER_URL);
@@ -257,7 +257,7 @@ describe("cover images", () => {
   it("passes the URL to Telegram nowhere: the host blocks its fetchers", async () => {
     const fetchMock = mockCoverFlow();
 
-    await sendTelegramNotification(TOKEN, CHAT_ID, WITH_IMAGE, { sleep: async () => {} });
+    await sendTelegramNotification(TOKEN, CHAT_ID, WITH_IMAGE, false, { sleep: async () => {} });
 
     // The cover URL must never appear inside a Telegram request.
     const telegramCalls = callUrls(fetchMock).filter((u) => u.includes("api.telegram.org"));
@@ -267,7 +267,7 @@ describe("cover images", () => {
   it("uses sendMessage when the release has no cover", async () => {
     const fetchMock = mockCoverFlow();
 
-    await sendTelegramNotification(TOKEN, CHAT_ID, RELEASE, { sleep: async () => {} });
+    await sendTelegramNotification(TOKEN, CHAT_ID, RELEASE, false, { sleep: async () => {} });
 
     expect(callUrls(fetchMock)).toHaveLength(1);
     expect(callUrls(fetchMock)[0]).toContain("/sendMessage");
@@ -276,7 +276,7 @@ describe("cover images", () => {
   it("falls back to text when the cover cannot be downloaded", async () => {
     const fetchMock = mockCoverFlow({ coverStatus: 404 });
 
-    await sendTelegramNotification(TOKEN, CHAT_ID, WITH_IMAGE, { sleep: async () => {} });
+    await sendTelegramNotification(TOKEN, CHAT_ID, WITH_IMAGE, false, { sleep: async () => {} });
 
     const urls = callUrls(fetchMock);
     expect(urls[0]).toBe(COVER_URL);
@@ -286,7 +286,7 @@ describe("cover images", () => {
   it("falls back to text when the cover is not an image", async () => {
     const fetchMock = mockCoverFlow({ coverType: "text/html" });
 
-    await sendTelegramNotification(TOKEN, CHAT_ID, WITH_IMAGE, { sleep: async () => {} });
+    await sendTelegramNotification(TOKEN, CHAT_ID, WITH_IMAGE, false, { sleep: async () => {} });
 
     expect(callUrls(fetchMock)[1]).toContain("/sendMessage");
   });
@@ -294,7 +294,7 @@ describe("cover images", () => {
   it("falls back to text when the cover exceeds the size cap", async () => {
     const fetchMock = mockCoverFlow({ coverBytes: MAX_COVER_BYTES + 1 });
 
-    await sendTelegramNotification(TOKEN, CHAT_ID, WITH_IMAGE, { sleep: async () => {} });
+    await sendTelegramNotification(TOKEN, CHAT_ID, WITH_IMAGE, false, { sleep: async () => {} });
 
     expect(callUrls(fetchMock)[1]).toContain("/sendMessage");
   });
@@ -303,7 +303,7 @@ describe("cover images", () => {
     const fetchMock = mockCoverFlow({ telegramStatus: 400 });
     vi.spyOn(console, "warn").mockImplementation(() => {});
 
-    await sendTelegramNotification(TOKEN, CHAT_ID, WITH_IMAGE, { sleep: async () => {} });
+    await sendTelegramNotification(TOKEN, CHAT_ID, WITH_IMAGE, false, { sleep: async () => {} });
 
     const urls = callUrls(fetchMock);
     expect(urls[1]).toContain("/sendPhoto");
@@ -319,7 +319,7 @@ describe("cover images", () => {
     });
     vi.stubGlobal("fetch", impl);
 
-    await sendTelegramNotification(TOKEN, CHAT_ID, WITH_IMAGE, { sleep: async () => {} });
+    await sendTelegramNotification(TOKEN, CHAT_ID, WITH_IMAGE, false, { sleep: async () => {} });
 
     expect(String(impl.mock.calls[1]?.[0])).toContain("/sendMessage");
   });

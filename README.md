@@ -34,7 +34,7 @@ cron */15  →  scheduled()  →  fetchLatestReleases()   src/feed.ts      (RSS 
 | Archivo | Rol |
 | --- | --- |
 | `src/feed.ts` | Descarga y parseo del RSS. Limpia CDATA y entidades HTML. Lanza `FeedError` en 4xx/5xx o fallo de red. |
-| `src/store.ts` | `filterUnseen` / `markSeen` sobre el namespace KV `SEEN_RELEASES`. |
+| `src/store.ts` | `filterUnseen` / `markSeen` sobre `SEEN_RELEASES`. Clave por versión del post, para que un repack actualizado vuelva a notificar. |
 | `src/notify.ts` | Transporte común: 1 reintento con backoff de 2 s ante 5xx/408/429/timeout, sin reintento ante 4xx, `NotificationError` tipado. |
 | `src/telegram.ts` | Envío por Bot API. Sube la portada con `sendPhoto` (multipart) y cae a `sendMessage` si falla. |
 | `src/whatsapp.ts` | Envío por CallMeBot. |
@@ -246,6 +246,11 @@ El Cron Trigger `*/15 * * * *` queda activo automáticamente tras el deploy.
 - El feed incluye posts que no son releases ("Upcoming Repacks", "Updates
   Digest"). Se filtran por categoría: los repacks reales llevan
   `Lossless Repack`, esos otros no.
+- FitGirl actualiza un repack editando el post existente y subiéndole la fecha
+  de publicación, con lo que reaparece arriba en el feed con el mismo `guid`.
+  Por eso la clave de KV es `guid@timestamp`: una actualización vuelve a
+  notificar, marcada como "🔄 Repack actualizado", mientras que releer el
+  mismo post sin cambios no genera nada.
 - La portada de cada release viene en el propio feed (primer `<img>` de
   `content:encoded`). El Worker la descarga y la sube a Telegram, porque el
   host de imágenes rechaza a los fetchers de Telegram si se le pasa la URL.

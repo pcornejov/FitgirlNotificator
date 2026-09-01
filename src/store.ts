@@ -23,6 +23,33 @@ export interface SeenReleasesKV {
 
 export const DEFAULT_SEEN_TTL_DAYS = 30;
 
+/** A release that still has to be notified, and why. */
+export interface PendingRelease {
+  release: Release;
+  /** True when this post was notified before under an earlier timestamp. */
+  isUpdate: boolean;
+}
+
+/**
+ * Key for one *version* of a post.
+ *
+ * FitGirl updates a repack in place and bumps its publish date, which floats
+ * the post back to the top of the feed under the same guid. Keying on the guid
+ * alone would swallow those updates, so the timestamp is part of the key.
+ */
+export function versionKey(release: Release): string {
+  const parsed = Date.parse(release.publishedAt);
+  const stamp = Number.isNaN(parsed)
+    ? release.publishedAt.replace(/\s+/g, "_")
+    : String(Math.floor(parsed / 1000));
+  return `${release.id}@${stamp}`;
+}
+
+/** Key marking that a post has been notified at all, in any version. */
+export function postKey(release: Release): string {
+  return release.id;
+}
+
 /** Cloudflare KV rejects TTLs below 60 seconds. */
 const MIN_TTL_SECONDS = 60;
 const SECONDS_PER_DAY = 86_400;
@@ -34,12 +61,12 @@ export function ttlSecondsFromDays(ttlDays: number): number {
     : MIN_TTL_SECONDS;
 }
 
-/** Returns true when the release has already been notified. */
+/** Returns true when this exact version of the release has been notified. */
 export async function hasBeenSeen(
-  releaseId: string,
+  release: Release,
   kv: SeenReleasesKV,
 ): Promise<boolean> {
-  return (await kv.get(releaseId)) !== null;
+  return (await kv.get(versionKey(release))) !== null;
 }
 
 /**
@@ -52,19 +79,24 @@ export async function hasBeenSeen(
 export async function filterUnseen(
   releases: Release[],
   kv: SeenReleasesKV,
-): Promise<Release[]> {
-  const unseen: Release[] = [];
+): Promise<PendingRelease[]> {
+  const unseen: PendingRelease[] = [];
   const inspected = new Set<string>();
 
   for (const release of releases) {
-    if (inspected.has(release.id)) {
+    const key = versionKey(release);
+    if (inspected.has(key)) {
       continue;
     }
-    inspected.add(release.id);
+    inspected.add(key);
 
-    if (!(await hasBeenSeen(release.id, kv))) {
-      unseen.push(release);
+    if (await hasBeenSeen(release, kv)) {
+      continue;
     }
+
+    // Known post, new timestamp: the repack was updated and reposted.
+    const isUpdate = (await kv.get(postKey(release))) !== null;
+    unseen.push({ release, isUpdate });
   }
 
   return unseen;
@@ -77,11 +109,15 @@ export async function filterUnseen(
  * the caller can log them; the release simply stays unseen and is retried.
  */
 export async function markSeen(
-  releaseId: string,
+  release: Release,
   kv: SeenReleasesKV,
   ttlDays: number = DEFAULT_SEEN_TTL_DAYS,
 ): Promise<void> {
-  await kv.put(releaseId, new Date().toISOString(), {
-    expirationTtl: ttlSecondsFromDays(ttlDays),
-  });
+  const options = { expirationTtl: ttlSecondsFromDays(ttlDays) };
+  const now = new Date().toISOString();
+
+  // The version key suppresses this exact post; the post key is what later
+  // tells an update apart from a first-time release.
+  await kv.put(versionKey(release), now, options);
+  await kv.put(postKey(release), now, options);
 }

@@ -14,7 +14,7 @@ export const DEFAULT_CHANNEL: ChannelName = "telegram";
 
 export interface Notifier {
   readonly channel: ChannelName;
-  send(release: Release, options?: SendOptions): Promise<void>;
+  send(release: Release, isUpdate: boolean, options?: SendOptions): Promise<void>;
 }
 
 /** Credentials needed by the channels, as they arrive from the environment. */
@@ -66,8 +66,8 @@ export function createNotifier(config: NotifierConfig): Notifier {
     }
     return {
       channel,
-      send: (release, options) =>
-        sendTelegramNotification(token, chatId, release, options ?? {}),
+      send: (release, isUpdate, options) =>
+        sendTelegramNotification(token, chatId, release, isUpdate, options ?? {}),
     };
   }
 
@@ -80,7 +80,7 @@ export function createNotifier(config: NotifierConfig): Notifier {
   }
   return {
     channel,
-    send: (release, options) =>
-      sendWhatsAppNotification(phone, apiKey, release, options ?? {}),
+    send: (release, isUpdate, options) =>
+      sendWhatsAppNotification(phone, apiKey, release, isUpdate, options ?? {}),
   };
 }

@@ -1,5 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { parseFeed } from "../src/feed";
 import worker, { type Env, NOTIFY_INTERVAL_MS, dryRun, runNotifier } from "../src/index";
+import { versionKey } from "../src/store";
 import { TELEGRAM_API_BASE } from "../src/telegram";
 import { CALLMEBOT_ENDPOINT } from "../src/whatsapp";
 import { FITGIRL_FEED_XML } from "./fixtures";
@@ -22,21 +24,47 @@ const NON_RELEASE_IDS = [
   "https://fitgirl-repacks.site/?p=48001",
 ];
 
+const FIXTURE = parseFeed(FITGIRL_FEED_XML);
+
+/** KV key for the exact version of a fixture release. */
+function vkey(id: string): string {
+  return versionKey(FIXTURE.find((r) => r.id === id) as (typeof FIXTURE)[number]);
+}
+
+/** Both keys markSeen writes for a release. */
+function keysFor(ids: string[]): string[] {
+  return [...ids, ...ids.map(vkey)].sort();
+}
+
 interface Scenario {
   kv: MemoryKV;
   env: Env;
   fetchMock: ReturnType<typeof vi.fn>;
-  /** URLs of the notification requests actually issued. */
-  notified: () => URL[];
+  /** The notification requests actually issued. */
+  notified: () => Sent[];
+}
+
+/** One outbound notification request, with whatever body it carried. */
+interface Sent {
+  url: URL;
+  init: RequestInit | undefined;
 }
 
 function isNotificationUrl(url: URL): boolean {
   return url.origin === TELEGRAM_API_BASE || url.href.startsWith(CALLMEBOT_ENDPOINT);
 }
 
-/** The message text, whichever channel produced the request. */
-function textOf(url: URL): string {
-  return url.searchParams.get("text") ?? "";
+/**
+ * The message text, whichever channel and shape produced the request: a query
+ * parameter for sendMessage/CallMeBot, a multipart caption for sendPhoto.
+ */
+function textOf(sent: Sent): string {
+  const fromQuery = sent.url.searchParams.get("text");
+  if (fromQuery !== null) {
+    return fromQuery;
+  }
+  const body = sent.init?.body;
+  return body instanceof FormData ? String(body.get("caption") ?? "") : "";
 }
 
 /**
@@ -45,19 +73,20 @@ function textOf(url: URL): string {
  */
 function scenario(
   overrides: Partial<Env> = {},
-  notificationStatus: (url: URL, call: number) => number = () => 200,
+  notificationStatus: (sent: Sent, call: number) => number = () => 200,
 ): Scenario {
   const kv = new MemoryKV();
-  const sent: URL[] = [];
+  const sent: Sent[] = [];
   let call = 0;
 
-  const fetchMock = vi.fn(async (input: string | URL) => {
+  const fetchMock = vi.fn(async (input: string | URL, init?: RequestInit) => {
     const url = new URL(typeof input === "string" ? input : input.toString());
 
     if (isNotificationUrl(url)) {
-      sent.push(url);
+      const entry: Sent = { url, init };
+      sent.push(entry);
       call += 1;
-      const status = notificationStatus(url, call);
+      const status = notificationStatus(entry, call);
       return new Response(JSON.stringify({ ok: status === 200 }), {
         status,
         headers: { "Content-Type": "application/json" },
@@ -66,6 +95,14 @@ function scenario(
 
     if (url.href === FEED_URL) {
       return new Response(FITGIRL_FEED_XML, { status: 200 });
+    }
+
+    // Cover art embedded in the fixture.
+    if (url.hostname.endsWith("imageban.ru")) {
+      return new Response(new Uint8Array(2048), {
+        status: 200,
+        headers: { "Content-Type": "image/jpeg" },
+      });
     }
 
     throw new Error(`Unexpected fetch to ${url.href}`);
@@ -106,19 +143,19 @@ describe("runNotifier", () => {
     expect(result.sent).toEqual(RELEASE_IDS);
     expect(result.failed).toEqual([]);
     expect(notified()).toHaveLength(2);
-    expect([...kv.entries.keys()].sort()).toEqual([...RELEASE_IDS].sort());
+    expect([...kv.entries.keys()].sort()).toEqual(keysFor(RELEASE_IDS));
   });
 
   it("sends only the releases not seen before", async () => {
     const { env, kv, notified } = scenario();
-    kv.seed(RELEASE_IDS[0] as string);
+    kv.seed(vkey(RELEASE_IDS[0] as string));
 
     const result = await runNotifier(env, { sleep: async () => {} }, async () => {});
 
     expect(result.unseen).toBe(1);
     expect(result.sent).toEqual([RELEASE_IDS[1]]);
     expect(notified()).toHaveLength(1);
-    expect(textOf(notified()[0] as URL)).toContain("Cyber Drift 2 &amp; The Lost City");
+    expect(textOf(notified()[0] as Sent)).toContain("Cyber Drift 2 &amp; The Lost City");
   });
 
   it("is idempotent across consecutive runs", async () => {
@@ -140,7 +177,7 @@ describe("runNotifier", () => {
     expect(result.unseen).toBe(2);
     expect(result.selected).toBe(1);
     expect(notified()).toHaveLength(1);
-    expect(kv.entries.has(RELEASE_IDS[1] as string)).toBe(false);
+    expect(kv.entries.has(vkey(RELEASE_IDS[1] as string))).toBe(false);
 
     // The deferred release goes out on the following run.
     const second = await runNotifier(env, { sleep: async () => {} }, async () => {});
@@ -149,21 +186,21 @@ describe("runNotifier", () => {
 
   it("does not mark a release as seen when delivery fails", async () => {
     // Every attempt for the second release fails with a non-retryable 400.
-    const { env, kv } = scenario({}, (url) =>
-      textOf(url).includes("Cyber Drift") ? 400 : 200,
+    const { env, kv } = scenario({}, (sent) =>
+      textOf(sent).includes("Cyber Drift") ? 400 : 200,
     );
 
     const result = await runNotifier(env, { sleep: async () => {} }, async () => {});
 
     expect(result.sent).toEqual([RELEASE_IDS[0]]);
     expect(result.failed.map((f) => f.id)).toEqual([RELEASE_IDS[1]]);
-    expect(kv.entries.has(RELEASE_IDS[1] as string)).toBe(false);
+    expect(kv.entries.has(vkey(RELEASE_IDS[1] as string))).toBe(false);
   });
 
   it("retries the failed release on the next run", async () => {
     let failFirstBatch = true;
-    const { env, kv } = scenario({}, (url) =>
-      failFirstBatch && textOf(url).includes("Cyber Drift") ? 400 : 200,
+    const { env, kv } = scenario({}, (sent) =>
+      failFirstBatch && textOf(sent).includes("Cyber Drift") ? 400 : 200,
     );
 
     await runNotifier(env, { sleep: async () => {} }, async () => {});
@@ -171,7 +208,7 @@ describe("runNotifier", () => {
     const second = await runNotifier(env, { sleep: async () => {} }, async () => {});
 
     expect(second.sent).toEqual([RELEASE_IDS[1]]);
-    expect(kv.entries.has(RELEASE_IDS[1] as string)).toBe(true);
+    expect(kv.entries.has(vkey(RELEASE_IDS[1] as string))).toBe(true);
   });
 
   it("writes nothing to KV when the feed request fails", async () => {
@@ -204,7 +241,7 @@ describe("channel selection", () => {
 
     await runNotifier(env, { sleep: async () => {} }, async () => {});
 
-    expect(notified().every((u) => u.origin === TELEGRAM_API_BASE)).toBe(true);
+    expect(notified().every((s) => s.url.origin === TELEGRAM_API_BASE)).toBe(true);
   });
 
   it("switches to CallMeBot with NOTIFIER=callmebot and no code change", async () => {
@@ -217,8 +254,8 @@ describe("channel selection", () => {
 
     expect(result.channel).toBe("callmebot");
     expect(notified()).toHaveLength(2);
-    expect(notified().every((u) => u.href.startsWith(CALLMEBOT_ENDPOINT))).toBe(true);
-    expect([...kv.entries.keys()].sort()).toEqual([...RELEASE_IDS].sort());
+    expect(notified().every((s) => s.url.href.startsWith(CALLMEBOT_ENDPOINT))).toBe(true);
+    expect([...kv.entries.keys()].sort()).toEqual(keysFor(RELEASE_IDS));
   });
 
   it("does not require the inactive channel's credentials", async () => {
@@ -327,7 +364,7 @@ describe("worker handlers", () => {
 
   it("scheduled sends only new releases and keeps KV consistent", async () => {
     const { env, kv, notified } = scenario();
-    kv.seed(RELEASE_IDS[0] as string);
+    kv.seed(vkey(RELEASE_IDS[0] as string), RELEASE_IDS[0] as string);
 
     await worker.scheduled(
       { cron: "*/15 * * * *", scheduledTime: Date.now() } as ScheduledController,
@@ -335,7 +372,7 @@ describe("worker handlers", () => {
     );
 
     expect(notified()).toHaveLength(1);
-    expect([...kv.entries.keys()].sort()).toEqual([...RELEASE_IDS].sort());
+    expect([...kv.entries.keys()].sort()).toEqual(keysFor(RELEASE_IDS));
   });
 
   it("scheduled swallows a feed outage without writing to KV", async () => {
@@ -376,7 +413,7 @@ describe("release filtering", () => {
     const result = await runNotifier(env, { sleep: async () => {} }, async () => {});
 
     expect(result.filtered).toBe(2);
-    const texts = notified().map((u) => textOf(u));
+    const texts = notified().map((n) => textOf(n));
     expect(texts.some((t) => t.includes("Upcoming Repacks"))).toBe(false);
     expect(texts.some((t) => t.includes("Updates Digest"))).toBe(false);
     // Filtered out before the KV lookup, so they never occupy a key either.
@@ -410,7 +447,7 @@ describe("release filtering", () => {
 
     expect(result.filtered).toBe(3);
     expect(notified()).toHaveLength(1);
-    expect(textOf(notified()[0] as URL)).toContain("Updates Digest");
+    expect(textOf(notified()[0] as Sent)).toContain("Updates Digest");
   });
 });
 
@@ -429,7 +466,7 @@ describe("pacing", () => {
   });
 
   it("still paces when a send fails, so one failure cannot burst the rest", async () => {
-    const { env } = scenario({}, (url) => (textOf(url).includes("Cyber Drift") ? 400 : 200));
+    const { env } = scenario({}, (sent) => (textOf(sent).includes("Cyber Drift") ? 400 : 200));
     const pauses: number[] = [];
 
     await runNotifier(env, { sleep: async () => {} }, async (ms) => {
@@ -437,5 +474,63 @@ describe("pacing", () => {
     });
 
     expect(pauses).toEqual([NOTIFY_INTERVAL_MS]);
+  });
+});
+
+describe("updated repacks", () => {
+  /** The fixture, with the first repack republished under a later date. */
+  const REPUBLISHED_XML = FITGIRL_FEED_XML.replace(
+    "<pubDate>Mon, 01 Sep 2025 08:30:00 +0000</pubDate>",
+    "<pubDate>Fri, 12 Sep 2025 11:00:00 +0000</pubDate>",
+  );
+
+  it("notifies again when a repack is updated and reposted", async () => {
+    const { env, kv, fetchMock, notified } = scenario();
+
+    // First run: both repacks go out as new releases.
+    const first = await runNotifier(env, { sleep: async () => {} }, async () => {});
+    expect(first.sent).toEqual(RELEASE_IDS);
+    expect(first.updated).toEqual([]);
+
+    // The site republishes the first repack with a newer date.
+    fetchMock.mockImplementation(async (input: string | URL, init?: RequestInit) => {
+      const url = new URL(String(input));
+      if (url.href === FEED_URL) {
+        return new Response(REPUBLISHED_XML, { status: 200 });
+      }
+      if (url.hostname.endsWith("imageban.ru")) {
+        return new Response(new Uint8Array(2048), {
+          status: 200,
+          headers: { "Content-Type": "image/jpeg" },
+        });
+      }
+      notified().push({ url, init });
+      return new Response(JSON.stringify({ ok: true }), { status: 200 });
+    });
+
+    const second = await runNotifier(env, { sleep: async () => {} }, async () => {});
+
+    expect(second.sent).toEqual([RELEASE_IDS[0]]);
+    expect(second.updated).toEqual([RELEASE_IDS[0]]);
+    // Both versions are now recorded, so neither repeats.
+    expect(kv.entries.has(vkey(RELEASE_IDS[0] as string))).toBe(true);
+  });
+
+  it("labels an update differently from a new release", async () => {
+    const { env, notified } = scenario();
+    await runNotifier(env, { sleep: async () => {} }, async () => {});
+
+    expect(textOf(notified()[0] as Sent)).toContain("Nuevo Release");
+    expect(textOf(notified()[0] as Sent)).not.toContain("actualizado");
+  });
+
+  it("does not re-notify a repack whose publish date has not changed", async () => {
+    const { env, notified } = scenario();
+
+    await runNotifier(env, { sleep: async () => {} }, async () => {});
+    const second = await runNotifier(env, { sleep: async () => {} }, async () => {});
+
+    expect(second.sent).toEqual([]);
+    expect(notified()).toHaveLength(2);
   });
 });
