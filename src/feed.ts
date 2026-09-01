@@ -12,7 +12,17 @@ export interface Release {
   publishedAt: string;
   /** Cover image from the post body, when the item embeds one. */
   imageUrl?: string;
+  /** WordPress categories of the post, verbatim. */
+  categories: string[];
 }
+
+/**
+ * Category every actual repack carries. The site also publishes recurring
+ * posts that are not game releases — "Upcoming Repacks" is filed under
+ * Uncategorized, "Updates Digest" under its own category — so this is what
+ * separates a release from an announcement.
+ */
+export const RELEASE_CATEGORY = "Lossless Repack";
 
 /** Browser-like UA: the site sits behind a WAF that rejects generic bot agents. */
 export const DEFAULT_USER_AGENT =
@@ -88,6 +98,41 @@ function cleanText(value: string): string {
   return decodeEntities(stripCdata(value)).replace(/\s+/g, " ").trim();
 }
 
+/** Reads every occurrence of `<tag>` inside a single `<item>` block. */
+function readTags(itemXml: string, tag: string): string[] {
+  const matcher = new RegExp(`<${tag}\\b[^>]*>([\\s\\S]*?)<\\/${tag}>`, "gi");
+  const values: string[] = [];
+
+  let match: RegExpExecArray | null = matcher.exec(itemXml);
+  while (match !== null) {
+    const value = cleanText(match[1] ?? "");
+    if (value !== "") {
+      values.push(value);
+    }
+    match = matcher.exec(itemXml);
+  }
+
+  return values;
+}
+
+/**
+ * True when the post is an actual game release.
+ *
+ * An empty `requiredCategory` disables the check and lets every feed entry
+ * through.
+ */
+export function isGameRelease(
+  release: Release,
+  requiredCategory: string = RELEASE_CATEGORY,
+): boolean {
+  if (requiredCategory === "") {
+    return true;
+  }
+
+  const needle = requiredCategory.toLowerCase();
+  return release.categories.some((category) => category.toLowerCase() === needle);
+}
+
 /** Reads the first occurrence of `<tag>` inside a single `<item>` block. */
 function readTag(itemXml: string, tag: string): string {
   const matcher = new RegExp(`<${tag}\\b[^>]*>([\\s\\S]*?)<\\/${tag}>`, "i");
@@ -140,7 +185,13 @@ export function parseFeed(xml: string): Release[] {
 
     const id = guid !== "" ? guid : link;
     if (id !== "" && title !== "") {
-      const release: Release = { id, title, link, publishedAt };
+      const release: Release = {
+        id,
+        title,
+        link,
+        publishedAt,
+        categories: readTags(itemXml, "category"),
+      };
       const imageUrl = readCoverImage(rawItemXml);
       if (imageUrl !== undefined) {
         release.imageUrl = imageUrl;

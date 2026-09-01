@@ -10,10 +10,16 @@ const FEED_URL = "https://fitgirl-repacks.site/feed/";
 const TELEGRAM_SECRETS = { TELEGRAM_BOT_TOKEN: "123:token", TELEGRAM_CHAT_ID: "42" };
 const CALLMEBOT_SECRETS = { CALLMEBOT_PHONE: "10000000000", CALLMEBOT_API_KEY: "key" };
 
+/** The two actual repacks in the fixture, in feed order. */
 const RELEASE_IDS = [
   "https://fitgirl-repacks.site/?p=48211",
   "https://fitgirl-repacks.site/?p=48190",
+];
+
+/** Recurring posts that are not game releases. */
+const NON_RELEASE_IDS = [
   "https://fitgirl-repacks.site/upcoming-repacks/",
+  "https://fitgirl-repacks.site/?p=48001",
 ];
 
 interface Scenario {
@@ -95,16 +101,17 @@ describe("runNotifier", () => {
     const result = await runNotifier(env, { sleep: async () => {} });
 
     expect(result.channel).toBe("telegram");
-    expect(result.fetched).toBe(3);
+    expect(result.fetched).toBe(4);
+    expect(result.filtered).toBe(2);
     expect(result.sent).toEqual(RELEASE_IDS);
     expect(result.failed).toEqual([]);
-    expect(notified()).toHaveLength(3);
+    expect(notified()).toHaveLength(2);
     expect([...kv.entries.keys()].sort()).toEqual([...RELEASE_IDS].sort());
   });
 
   it("sends only the releases not seen before", async () => {
     const { env, kv, notified } = scenario();
-    kv.seed(RELEASE_IDS[0] as string, RELEASE_IDS[2] as string);
+    kv.seed(RELEASE_IDS[0] as string);
 
     const result = await runNotifier(env, { sleep: async () => {} });
 
@@ -122,22 +129,22 @@ describe("runNotifier", () => {
 
     expect(second.unseen).toBe(0);
     expect(second.sent).toEqual([]);
-    expect(notified()).toHaveLength(3);
+    expect(notified()).toHaveLength(2);
   });
 
   it("caps the batch at MAX_NOTIFICATIONS_PER_RUN and defers the rest", async () => {
-    const { env, kv, notified } = scenario({ MAX_NOTIFICATIONS_PER_RUN: "2" });
+    const { env, kv, notified } = scenario({ MAX_NOTIFICATIONS_PER_RUN: "1" });
 
     const result = await runNotifier(env, { sleep: async () => {} });
 
-    expect(result.unseen).toBe(3);
-    expect(result.selected).toBe(2);
-    expect(notified()).toHaveLength(2);
-    expect(kv.entries.has(RELEASE_IDS[2] as string)).toBe(false);
+    expect(result.unseen).toBe(2);
+    expect(result.selected).toBe(1);
+    expect(notified()).toHaveLength(1);
+    expect(kv.entries.has(RELEASE_IDS[1] as string)).toBe(false);
 
     // The deferred release goes out on the following run.
     const second = await runNotifier(env, { sleep: async () => {} });
-    expect(second.sent).toEqual([RELEASE_IDS[2]]);
+    expect(second.sent).toEqual([RELEASE_IDS[1]]);
   });
 
   it("does not mark a release as seen when delivery fails", async () => {
@@ -148,7 +155,7 @@ describe("runNotifier", () => {
 
     const result = await runNotifier(env, { sleep: async () => {} });
 
-    expect(result.sent).toEqual([RELEASE_IDS[0], RELEASE_IDS[2]]);
+    expect(result.sent).toEqual([RELEASE_IDS[0]]);
     expect(result.failed.map((f) => f.id)).toEqual([RELEASE_IDS[1]]);
     expect(kv.entries.has(RELEASE_IDS[1] as string)).toBe(false);
   });
@@ -209,7 +216,7 @@ describe("channel selection", () => {
     const result = await runNotifier(env, { sleep: async () => {} });
 
     expect(result.channel).toBe("callmebot");
-    expect(notified()).toHaveLength(3);
+    expect(notified()).toHaveLength(2);
     expect(notified().every((u) => u.href.startsWith(CALLMEBOT_ENDPOINT))).toBe(true);
     expect([...kv.entries.keys()].sort()).toEqual([...RELEASE_IDS].sort());
   });
@@ -222,21 +229,23 @@ describe("channel selection", () => {
     await expect(runNotifier(env, { sleep: async () => {} })).resolves.toMatchObject({
       channel: "callmebot",
     });
-    expect(notified()).toHaveLength(3);
+    expect(notified()).toHaveLength(2);
   });
 });
 
 describe("dryRun", () => {
   it("reports what would be sent without touching KV or the notification API", async () => {
-    const { env, kv, notified } = scenario({ MAX_NOTIFICATIONS_PER_RUN: "2" });
+    const { env, kv, notified } = scenario({ MAX_NOTIFICATIONS_PER_RUN: "1" });
 
     const result = await dryRun(env);
 
     expect(result.dryRun).toBe(true);
     expect(result.channel).toBe("telegram");
-    expect(result.fetched).toBe(3);
-    expect(result.unseen).toBe(3);
-    expect(result.wouldNotify.map((r) => r.id)).toEqual(RELEASE_IDS.slice(0, 2));
+    expect(result.fetched).toBe(4);
+    expect(result.filtered).toBe(2);
+    expect(result.requiredCategory).toBe("Lossless Repack");
+    expect(result.unseen).toBe(2);
+    expect(result.wouldNotify.map((r) => r.id)).toEqual(RELEASE_IDS.slice(0, 1));
     expect(result.skipped).toBe(1);
     expect(kv.putCalls).toBe(0);
     expect(notified()).toHaveLength(0);
@@ -247,7 +256,7 @@ describe("dryRun", () => {
     delete env.TELEGRAM_BOT_TOKEN;
     delete env.TELEGRAM_CHAT_ID;
 
-    await expect(dryRun(env)).resolves.toMatchObject({ dryRun: true, fetched: 3 });
+    await expect(dryRun(env)).resolves.toMatchObject({ dryRun: true, fetched: 4 });
     expect(notified()).toHaveLength(0);
   });
 });
@@ -262,7 +271,7 @@ describe("worker handlers", () => {
     expect(response.status).toBe(200);
     expect(response.headers.get("Content-Type")).toContain("application/json");
     expect(body.dryRun).toBe(true);
-    expect(body.wouldNotify).toHaveLength(3);
+    expect(body.wouldNotify).toHaveLength(2);
     expect(kv.putCalls).toBe(0);
     expect(notified()).toHaveLength(0);
   });
@@ -325,7 +334,7 @@ describe("worker handlers", () => {
       env,
     );
 
-    expect(notified()).toHaveLength(2);
+    expect(notified()).toHaveLength(1);
     expect([...kv.entries.keys()].sort()).toEqual([...RELEASE_IDS].sort());
   });
 
@@ -357,5 +366,50 @@ describe("worker handlers", () => {
 
     expect(kv.putCalls).toBe(0);
     expect(notified()).toHaveLength(0);
+  });
+});
+
+describe("release filtering", () => {
+  it("never notifies the site's non-release posts", async () => {
+    const { env, kv, notified } = scenario();
+
+    const result = await runNotifier(env, { sleep: async () => {} });
+
+    expect(result.filtered).toBe(2);
+    const texts = notified().map((u) => textOf(u));
+    expect(texts.some((t) => t.includes("Upcoming Repacks"))).toBe(false);
+    expect(texts.some((t) => t.includes("Updates Digest"))).toBe(false);
+    // Filtered out before the KV lookup, so they never occupy a key either.
+    for (const id of NON_RELEASE_IDS) {
+      expect(kv.entries.has(id)).toBe(false);
+    }
+  });
+
+  it("does not spend the per-run budget on filtered posts", async () => {
+    const { env, notified } = scenario({ MAX_NOTIFICATIONS_PER_RUN: "2" });
+
+    await runNotifier(env, { sleep: async () => {} });
+
+    // Both real releases go out even though the feed holds 4 entries.
+    expect(notified()).toHaveLength(2);
+  });
+
+  it("notifies everything when REQUIRE_CATEGORY is empty", async () => {
+    const { env, notified } = scenario({ REQUIRE_CATEGORY: "" });
+
+    const result = await runNotifier(env, { sleep: async () => {} });
+
+    expect(result.filtered).toBe(0);
+    expect(notified()).toHaveLength(4);
+  });
+
+  it("honours a custom required category", async () => {
+    const { env, notified } = scenario({ REQUIRE_CATEGORY: "Updates Digest" });
+
+    const result = await runNotifier(env, { sleep: async () => {} });
+
+    expect(result.filtered).toBe(3);
+    expect(notified()).toHaveLength(1);
+    expect(textOf(notified()[0] as URL)).toContain("Updates Digest");
   });
 });

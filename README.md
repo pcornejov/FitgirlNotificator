@@ -24,6 +24,7 @@ Soporta dos canales, intercambiables con la variable `NOTIFIER`:
 
 ```
 cron */15  →  scheduled()  →  fetchLatestReleases()   src/feed.ts      (RSS → Release[])
+                           →  isGameRelease()          src/feed.ts      (descarta posts que no son juegos)
                            →  filterUnseen(KV)        src/store.ts     (descarta ya notificados)
                            →  slice(MAX_NOTIFICATIONS_PER_RUN)
                            →  notifier.send()          src/notifier.ts  (Telegram o CallMeBot)
@@ -35,7 +36,7 @@ cron */15  →  scheduled()  →  fetchLatestReleases()   src/feed.ts      (RSS 
 | `src/feed.ts` | Descarga y parseo del RSS. Limpia CDATA y entidades HTML. Lanza `FeedError` en 4xx/5xx o fallo de red. |
 | `src/store.ts` | `filterUnseen` / `markSeen` sobre el namespace KV `SEEN_RELEASES`. |
 | `src/notify.ts` | Transporte común: 1 reintento con backoff de 2 s ante 5xx/408/429/timeout, sin reintento ante 4xx, `NotificationError` tipado. |
-| `src/telegram.ts` | Envío por Bot API (`sendMessage`, `parse_mode=HTML`). |
+| `src/telegram.ts` | Envío por Bot API. Sube la portada con `sendPhoto` (multipart) y cae a `sendMessage` si falla. |
 | `src/whatsapp.ts` | Envío por CallMeBot. |
 | `src/notifier.ts` | Interfaz `Notifier` y selección de canal según `NOTIFIER`. |
 | `src/index.ts` | Handlers `scheduled` (cron) y `fetch` (dry-run `GET /test`). |
@@ -150,6 +151,7 @@ Variables públicas (`[vars]` en `wrangler.toml`):
 | --- | --- | --- |
 | `NOTIFIER` | `telegram` | Canal activo: `telegram` o `callmebot`. |
 | `FEED_URL` | `https://fitgirl-repacks.site/feed/` | Feed RSS a consultar. |
+| `REQUIRE_CATEGORY` | `Lossless Repack` | Solo se notifican posts en esta categoría. `""` desactiva el filtro. |
 | `MAX_NOTIFICATIONS_PER_RUN` | `5` | Tope de mensajes por ejecución del cron. |
 | `SEEN_TTL_DAYS` | `30` | Días que un release permanece marcado como visto en KV. |
 | `USER_AGENT` | UA de Chrome | Opcional; sobreescribe el User-Agent de navegador usado contra el WAF. |
@@ -241,6 +243,12 @@ El Cron Trigger `*/15 * * * *` queda activo automáticamente tras el deploy.
 ## Notas
 
 - El Worker solo consume el feed RSS oficial; no hace scraping de páginas HTML.
+- El feed incluye posts que no son releases ("Upcoming Repacks", "Updates
+  Digest"). Se filtran por categoría: los repacks reales llevan
+  `Lossless Repack`, esos otros no.
+- La portada de cada release viene en el propio feed (primer `<img>` de
+  `content:encoded`). El Worker la descarga y la sube a Telegram, porque el
+  host de imágenes rechaza a los fetchers de Telegram si se le pasa la URL.
 - Cambiar de canal es cambiar `NOTIFIER` en `wrangler.toml`, cargar los secrets
   correspondientes y volver a desplegar. No hay cambios de código.
 - La primera ejecución notificará todos los releases presentes en el feed (hasta

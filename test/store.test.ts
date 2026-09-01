@@ -15,6 +15,7 @@ function release(id: string): Release {
     title: `Game ${id}`,
     link: `https://fitgirl-repacks.site/${id}/`,
     publishedAt: "Mon, 01 Sep 2025 08:30:00 +0000",
+    categories: ["Lossless Repack"],
   };
 }
 

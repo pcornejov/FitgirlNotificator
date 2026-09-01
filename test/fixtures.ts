@@ -17,6 +17,7 @@ export const FITGIRL_FEED_XML = `<?xml version="1.0" encoding="UTF-8"?>
     <dc:creator><![CDATA[FitGirl]]></dc:creator>
     <pubDate>Mon, 01 Sep 2025 08:30:00 +0000</pubDate>
     <category><![CDATA[Lossless Repack]]></category>
+    <category><![CDATA[Horror]]></category>
     <guid isPermaLink="false">https://fitgirl-repacks.site/?p=48211</guid>
     <description><![CDATA[<p>Read more <a href="https://example.com/link">here</a></p>]]></description>
     <content:encoded><![CDATA[<p><img decoding="async" src="https://i2.imageban.ru/out/2026/09/01/cover-one.jpg" alt="cover" /><img src="https://i2.imageban.ru/out/2026/09/01/screenshot.jpg" /></p><p>Genres/Tags: Horror<link rel="stylesheet" href="https://evil.example/x.css"></p>]]></content:encoded>
@@ -25,6 +26,7 @@ export const FITGIRL_FEED_XML = `<?xml version="1.0" encoding="UTF-8"?>
     <title><![CDATA[Cyber Drift 2 &amp; The Lost City]]></title>
     <link>https://fitgirl-repacks.site/cyber-drift-2/</link>
     <pubDate>Sun, 31 Aug 2025 21:05:11 +0000</pubDate>
+    <category><![CDATA[Lossless Repack]]></category>
     <guid isPermaLink="false">https://fitgirl-repacks.site/?p=48190</guid>
     <content:encoded><![CDATA[<p>Repack size: 12 GB</p>]]></content:encoded>
   </item>
@@ -32,7 +34,15 @@ export const FITGIRL_FEED_XML = `<?xml version="1.0" encoding="UTF-8"?>
     <title>Upcoming Repacks</title>
     <link>https://fitgirl-repacks.site/upcoming-repacks/</link>
     <pubDate>Sat, 30 Aug 2025 10:00:00 +0000</pubDate>
+    <category><![CDATA[Uncategorized]]></category>
     <guid isPermaLink="true">https://fitgirl-repacks.site/upcoming-repacks/</guid>
+  </item>
+  <item>
+    <title>Updates Digest for August 30, 2025</title>
+    <link>https://fitgirl-repacks.site/updates-digest-for-august-30-2025/</link>
+    <pubDate>Sat, 30 Aug 2025 09:00:00 +0000</pubDate>
+    <category><![CDATA[Updates Digest]]></category>
+    <guid isPermaLink="false">https://fitgirl-repacks.site/?p=48001</guid>
   </item>
 </channel>
 </rss>`;

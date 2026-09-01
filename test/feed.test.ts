@@ -2,8 +2,10 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   DEFAULT_USER_AGENT,
   FeedError,
+  type Release,
   decodeEntities,
   fetchLatestReleases,
+  isGameRelease,
   parseFeed,
 } from "../src/feed";
 import { EMPTY_FEED_XML, FITGIRL_FEED_XML } from "./fixtures";
@@ -28,13 +30,14 @@ describe("parseFeed", () => {
   it("maps every item field of a real WordPress feed", () => {
     const releases = parseFeed(FITGIRL_FEED_XML);
 
-    expect(releases).toHaveLength(3);
+    expect(releases).toHaveLength(4);
     expect(releases[0]).toEqual({
       id: "https://fitgirl-repacks.site/?p=48211",
       title: "Silent Hill’s Echo – Director's Cut",
       link: "https://fitgirl-repacks.site/silent-hills-echo/",
       publishedAt: "Mon, 01 Sep 2025 08:30:00 +0000",
       imageUrl: "https://i2.imageban.ru/out/2026/09/01/cover-one.jpg",
+      categories: ["Lossless Repack", "Horror"],
     });
   });
 
@@ -95,6 +98,7 @@ describe("parseFeed", () => {
       title: "No Guid Release",
       link: "https://fitgirl-repacks.site/no-guid/",
       publishedAt: "Sat, 30 Aug 2025 10:00:00 +0000",
+      categories: [],
     });
   });
 
@@ -136,6 +140,7 @@ describe("fetchLatestReleases", () => {
       "Silent Hill’s Echo – Director's Cut",
       "Cyber Drift 2 & The Lost City",
       "Upcoming Repacks",
+      "Updates Digest for August 30, 2025",
     ]);
   });
 
@@ -180,5 +185,38 @@ describe("fetchLatestReleases", () => {
   it("throws when the response body is empty", async () => {
     mockFetch("   ");
     await expect(fetchLatestReleases(FEED_URL)).rejects.toBeInstanceOf(FeedError);
+  });
+});
+
+describe("isGameRelease", () => {
+  const releases = parseFeed(FITGIRL_FEED_XML);
+  const byTitle = (title: string): Release =>
+    releases.find((r) => r.title.startsWith(title)) as Release;
+
+  it("accepts posts filed under the repack category", () => {
+    expect(isGameRelease(byTitle("Silent Hill"))).toBe(true);
+    expect(isGameRelease(byTitle("Cyber Drift"))).toBe(true);
+  });
+
+  it("rejects the site's recurring non-release posts", () => {
+    expect(isGameRelease(byTitle("Upcoming Repacks"))).toBe(false);
+    expect(isGameRelease(byTitle("Updates Digest"))).toBe(false);
+  });
+
+  it("matches the category case-insensitively", () => {
+    expect(isGameRelease(byTitle("Silent Hill"), "lossless repack")).toBe(true);
+  });
+
+  it("accepts everything when no category is required", () => {
+    expect(isGameRelease(byTitle("Upcoming Repacks"), "")).toBe(true);
+  });
+
+  it("rejects a post with no categories at all", () => {
+    const orphan = parseFeed(
+      `<rss><channel><item><title>No Cats</title>
+       <guid>https://fitgirl-repacks.site/?p=99</guid></item></channel></rss>`,
+    )[0] as Release;
+    expect(orphan.categories).toEqual([]);
+    expect(isGameRelease(orphan)).toBe(false);
   });
 });

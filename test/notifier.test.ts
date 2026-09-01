@@ -12,6 +12,7 @@ const RELEASE: Release = {
   title: "Test Game",
   link: "https://fitgirl-repacks.site/test-game/",
   publishedAt: "Mon, 01 Sep 2025 08:30:00 +0000",
+  categories: ["Lossless Repack"],
 };
 
 const TELEGRAM_ENV = {

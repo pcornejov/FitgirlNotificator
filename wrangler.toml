@@ -12,6 +12,10 @@ NOTIFIER = "telegram"
 FEED_URL = "https://fitgirl-repacks.site/feed/"
 MAX_NOTIFICATIONS_PER_RUN = "5"
 SEEN_TTL_DAYS = "30"
+# Only posts in this category are notified, which filters out the site's
+# recurring non-release posts ("Upcoming Repacks", "Updates Digest").
+# Set to "" to notify every feed entry.
+REQUIRE_CATEGORY = "Lossless Repack"
 
 # Created with: wrangler kv namespace create SEEN_RELEASES
 # The namespace id is an identifier, not a credential: it is meant to be

@@ -12,8 +12,10 @@
 import {
   DEFAULT_FEED_URL,
   DEFAULT_USER_AGENT,
+  RELEASE_CATEGORY,
   type Release,
   fetchLatestReleases,
+  isGameRelease,
 } from "./feed";
 import {
   type ChannelName,
@@ -41,6 +43,12 @@ export interface Env {
   USER_AGENT?: string;
   /** Active channel: "telegram" (default) or "callmebot". */
   NOTIFIER?: string;
+  /**
+   * Category a post must carry to be notified. Defaults to the repack
+   * category, which filters out the site's recurring non-release posts.
+   * Set to an empty string to notify every feed entry.
+   */
+  REQUIRE_CATEGORY?: string;
 
   // secrets (wrangler secret put)
   TELEGRAM_BOT_TOKEN?: string;
@@ -54,6 +62,8 @@ export const DEFAULT_MAX_NOTIFICATIONS_PER_RUN = 5;
 export interface RunResult {
   channel: ChannelName;
   fetched: number;
+  /** Entries dropped for not being game releases. */
+  filtered: number;
   unseen: number;
   selected: number;
   sent: string[];
@@ -64,8 +74,10 @@ export interface DryRunResult {
   dryRun: true;
   channel: ChannelName;
   feedUrl: string;
+  requiredCategory: string;
   maxNotificationsPerRun: number;
   fetched: number;
+  filtered: number;
   unseen: number;
   wouldNotify: Release[];
   skipped: number;
@@ -81,6 +93,11 @@ function parsePositiveInt(
 
 function feedUrlOf(env: Env): string {
   return env.FEED_URL !== undefined && env.FEED_URL !== "" ? env.FEED_URL : DEFAULT_FEED_URL;
+}
+
+function requiredCategoryOf(env: Env): string {
+  // Only an explicit empty string disables the filter; an unset var keeps it.
+  return env.REQUIRE_CATEGORY === undefined ? RELEASE_CATEGORY : env.REQUIRE_CATEGORY;
 }
 
 function userAgentOf(env: Env): string {
@@ -113,13 +130,17 @@ export async function runNotifier(
   const ttlDays = parsePositiveInt(env.SEEN_TTL_DAYS, DEFAULT_SEEN_TTL_DAYS);
 
   // Any failure here aborts the run before a single KV write happens.
-  const releases = await fetchLatestReleases(feedUrlOf(env), userAgentOf(env));
+  const fetched = await fetchLatestReleases(feedUrlOf(env), userAgentOf(env));
+  const requiredCategory = requiredCategoryOf(env);
+  // Filtered before the KV lookup, so non-releases never occupy a key.
+  const releases = fetched.filter((release) => isGameRelease(release, requiredCategory));
   const unseen = await filterUnseen(releases, env.SEEN_RELEASES);
   const selected = unseen.slice(0, maxPerRun);
 
   const result: RunResult = {
     channel: notifier.channel,
-    fetched: releases.length,
+    fetched: fetched.length,
+    filtered: fetched.length - releases.length,
     unseen: unseen.length,
     selected: selected.length,
     sent: [],
@@ -158,8 +179,10 @@ export async function dryRun(env: Env): Promise<DryRunResult> {
     DEFAULT_MAX_NOTIFICATIONS_PER_RUN,
   );
   const feedUrl = feedUrlOf(env);
+  const requiredCategory = requiredCategoryOf(env);
 
-  const releases = await fetchLatestReleases(feedUrl, userAgentOf(env));
+  const fetched = await fetchLatestReleases(feedUrl, userAgentOf(env));
+  const releases = fetched.filter((release) => isGameRelease(release, requiredCategory));
   const unseen = await filterUnseen(releases, env.SEEN_RELEASES);
   const wouldNotify = unseen.slice(0, maxPerRun);
 
@@ -167,8 +190,10 @@ export async function dryRun(env: Env): Promise<DryRunResult> {
     dryRun: true,
     channel: resolveChannel(env.NOTIFIER),
     feedUrl,
+    requiredCategory,
     maxNotificationsPerRun: maxPerRun,
-    fetched: releases.length,
+    fetched: fetched.length,
+    filtered: fetched.length - releases.length,
     unseen: unseen.length,
     wouldNotify,
     skipped: unseen.length - wouldNotify.length,
@@ -187,7 +212,8 @@ export default {
     try {
       const result = await runNotifier(env);
       console.log(
-        `cron ${event.cron} [${result.channel}]: fetched=${result.fetched} unseen=${result.unseen} ` +
+        `cron ${event.cron} [${result.channel}]: fetched=${result.fetched} ` +
+          `filtered=${result.filtered} unseen=${result.unseen} ` +
           `sent=${result.sent.length} failed=${result.failed.length}`,
       );
     } catch (error) {

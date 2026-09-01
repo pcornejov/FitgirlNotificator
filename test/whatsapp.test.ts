@@ -16,6 +16,7 @@ const RELEASE: Release = {
   title: "Cyber Drift 2 & The Lost City",
   link: "https://fitgirl-repacks.site/cyber-drift-2/",
   publishedAt: "Mon, 01 Sep 2025 08:30:00 +0000",
+  categories: ["Lossless Repack"],
 };
 
 /** Queues one Response (or thrown error) per attempt. */
