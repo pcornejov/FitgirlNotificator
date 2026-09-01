@@ -1,0 +1,26 @@
+name = "fitgirl-notificator"
+main = "src/index.ts"
+compatibility_date = "2024-09-23"
+
+# Runs every 15 minutes.
+[triggers]
+crons = ["*/15 * * * *"]
+
+[vars]
+FEED_URL = "https://fitgirl-repacks.site/feed/"
+MAX_NOTIFICATIONS_PER_RUN = "5"
+SEEN_TTL_DAYS = "30"
+
+# Create it with:
+#   wrangler kv namespace create SEEN_RELEASES
+# then paste the returned id below.
+[[kv_namespaces]]
+binding = "SEEN_RELEASES"
+id = "<REPLACE_WITH_YOUR_KV_NAMESPACE_ID>"
+
+# Secrets are NEVER stored here. Load them with:
+#   wrangler secret put CALLMEBOT_PHONE
+#   wrangler secret put CALLMEBOT_API_KEY
+
+[observability]
+enabled = true

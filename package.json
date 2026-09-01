@@ -1,0 +1,21 @@
+{
+  "name": "fitgirl-notificator",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Cloudflare Worker that watches the FitGirl Repacks RSS feed and sends WhatsApp alerts for new releases via CallMeBot.",
+  "type": "module",
+  "main": "src/index.ts",
+  "scripts": {
+    "dev": "npx wrangler dev",
+    "deploy": "npx wrangler deploy",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit",
+    "tail": "npx wrangler tail"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20240909.0",
+    "typescript": "^5.6.2",
+    "vitest": "^2.1.1"
+  }
+}
