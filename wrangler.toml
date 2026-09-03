@@ -9,7 +9,7 @@ crons = ["*/15 * * * *"]
 [vars]
 # Active channels: "telegram", "callmebot", or both as a comma-separated
 # list ("telegram,callmebot"). Every channel gets every release.
-NOTIFIER = "telegram,callmebot"
+NOTIFIER = "telegram"
 FEED_URL = "https://fitgirl-repacks.site/feed/"
 MAX_NOTIFICATIONS_PER_RUN = "5"
 SEEN_TTL_DAYS = "30"
