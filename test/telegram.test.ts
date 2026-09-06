@@ -1,7 +1,8 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Release } from "../src/feed";
-import { NotificationError } from "../src/notify";
+import { DEFAULT_TIMEOUT_MS, NotificationError } from "../src/notify";
 import {
+  COVER_TIMEOUT_MS,
   MAX_COVER_BYTES,
   TELEGRAM_API_BASE,
   buildRequestUrl,
@@ -322,5 +323,55 @@ describe("cover images", () => {
     await sendTelegramNotification(TOKEN, CHAT_ID, WITH_IMAGE, false, { sleep: async () => {} });
 
     expect(String(impl.mock.calls[1]?.[0])).toContain("/sendMessage");
+  });
+});
+
+describe("cover download timeout", () => {
+  const COVER_URL = "https://i2.imageban.ru/out/2026/09/06/cover.jpg";
+  const WITH_IMAGE: Release = { ...RELEASE, imageUrl: COVER_URL };
+
+  it("is far longer than the API timeout, since a scheduled run is slower", () => {
+    // The failure this guards against: a cron run aborting the download at the
+    // API timeout and silently falling back to text.
+    expect(COVER_TIMEOUT_MS).toBeGreaterThan(DEFAULT_TIMEOUT_MS * 2);
+  });
+
+  it("falls back to text when the download is aborted", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const impl = vi.fn(async (input: string | URL) => {
+      if (String(input) === COVER_URL) {
+        throw new DOMException("The operation was aborted", "AbortError");
+      }
+      return new Response(JSON.stringify({ ok: true }), { status: 200 });
+    });
+    vi.stubGlobal("fetch", impl);
+
+    await sendTelegramNotification(TOKEN, CHAT_ID, WITH_IMAGE, false, {
+      sleep: async () => {},
+    });
+
+    expect(String(impl.mock.calls[1]?.[0])).toContain("/sendMessage");
+  });
+
+  it("logs the elapsed time and the limit when the download aborts", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: string | URL) => {
+        if (String(input) === COVER_URL) {
+          throw new DOMException("The operation was aborted", "AbortError");
+        }
+        return new Response(JSON.stringify({ ok: true }), { status: 200 });
+      }),
+    );
+
+    await sendTelegramNotification(TOKEN, CHAT_ID, WITH_IMAGE, false, {
+      sleep: async () => {},
+    });
+
+    const message = String(warn.mock.calls[0]?.[0]);
+    expect(message).toContain("aborted");
+    expect(message).toContain(String(COVER_TIMEOUT_MS));
+    expect(message).toContain(COVER_URL);
   });
 });

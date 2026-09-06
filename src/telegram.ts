@@ -6,12 +6,7 @@
  */
 
 import { DEFAULT_USER_AGENT, type Release } from "./feed";
-import {
-  DEFAULT_TIMEOUT_MS,
-  NotificationError,
-  type SendOptions,
-  deliver,
-} from "./notify";
+import { NotificationError, type SendOptions, deliver } from "./notify";
 
 export const TELEGRAM_API_BASE = "https://api.telegram.org";
 export const CHANNEL = "telegram";
@@ -61,6 +56,20 @@ export function buildPhotoEndpoint(botToken: string): string {
  */
 export const MAX_COVER_BYTES = 5 * 1024 * 1024;
 
+/**
+ * Timeout for the cover download, deliberately far longer than the one used
+ * for the API calls themselves.
+ *
+ * The image host answers in about a second when the Worker runs from the fetch
+ * handler, but takes longer than ten seconds from a scheduled run, which was
+ * silently costing every cron notification its cover. The download is not on
+ * anyone's critical path, so it can afford to wait.
+ */
+export const COVER_TIMEOUT_MS = 25_000;
+
+/** Above this, the download is worth a log line even when it succeeds. */
+const SLOW_COVER_MS = 4_000;
+
 /** Filename for the upload, derived from the URL so the extension is right. */
 function coverFilename(imageUrl: string): string {
   const name = imageUrl.split("?")[0]?.split("/").pop() ?? "";
@@ -78,12 +87,10 @@ function coverFilename(imageUrl: string): string {
  * Returns null on any problem: a cover is a nice-to-have, never a reason to
  * lose the notification.
  */
-async function fetchCover(
-  imageUrl: string,
-  timeoutMs: number,
-): Promise<Blob | null> {
+async function fetchCover(imageUrl: string): Promise<Blob | null> {
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  const timer = setTimeout(() => controller.abort(), COVER_TIMEOUT_MS);
+  const started = Date.now();
   try {
     const response = await fetch(imageUrl, {
       headers: { "User-Agent": DEFAULT_USER_AGENT, Accept: "image/*,*/*;q=0.8" },
@@ -92,6 +99,11 @@ async function fetchCover(
     if (!response.ok) {
       console.warn(`Cover download failed with HTTP ${response.status}: ${imageUrl}`);
       return null;
+    }
+
+    const elapsed = Date.now() - started;
+    if (elapsed > SLOW_COVER_MS) {
+      console.log(`Cover download took ${elapsed}ms: ${imageUrl}`);
     }
 
     const contentType = (response.headers.get("Content-Type") ?? "").toLowerCase();
@@ -108,7 +120,9 @@ async function fetchCover(
     return blob;
   } catch (error) {
     console.warn(
-      `Cover download errored: ${error instanceof Error ? error.message : String(error)}`,
+      `Cover download errored after ${Date.now() - started}ms ` +
+        `(limit ${COVER_TIMEOUT_MS}ms): ` +
+        `${error instanceof Error ? error.message : String(error)} — ${imageUrl}`,
     );
     return null;
   } finally {
@@ -164,10 +178,9 @@ export async function sendTelegramNotification(
   }
 
   const message = formatMessage(release, isUpdate);
-  const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
 
   if (release.imageUrl !== undefined && release.imageUrl !== "") {
-    const cover = await fetchCover(release.imageUrl, timeoutMs);
+    const cover = await fetchCover(release.imageUrl);
     if (cover !== null) {
       const form = new FormData();
       form.set("chat_id", chatId);
