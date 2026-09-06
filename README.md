@@ -37,7 +37,7 @@ cron */15  →  scheduled()  →  fetchLatestReleases()   src/feed.ts      (RSS 
 | `src/feed.ts` | Descarga y parseo del RSS. Limpia CDATA y entidades HTML. Lanza `FeedError` en 4xx/5xx o fallo de red. |
 | `src/store.ts` | `filterUnseen` / `markSeen` sobre `SEEN_RELEASES`. Clave por versión del post, para que un repack actualizado vuelva a notificar. |
 | `src/notify.ts` | Transporte común: 1 reintento con backoff de 2 s ante 5xx/408/429/timeout, sin reintento ante 4xx, `NotificationError` tipado. |
-| `src/telegram.ts` | Envío por Bot API. Sube la portada con `sendPhoto` (multipart) y cae a `sendMessage` si falla. |
+| `src/telegram.ts` | Envío por Bot API. Manda la portada con `sendPhoto` vía proxy de imágenes y cae a `sendMessage` si falla. |
 | `src/whatsapp.ts` | Envío por CallMeBot. |
 | `src/notifier.ts` | Interfaz `Notifier` y selección de canal según `NOTIFIER`. |
 | `src/index.ts` | Handlers `scheduled` (cron) y `fetch` (dry-run `GET /test`). |
@@ -255,8 +255,10 @@ El Cron Trigger `*/15 * * * *` queda activo automáticamente tras el deploy.
   notificar, marcada como "🔄 Repack actualizado", mientras que releer el
   mismo post sin cambios no genera nada.
 - La portada de cada release viene en el propio feed (primer `<img>` de
-  `content:encoded`). El Worker la descarga y la sube a Telegram, porque el
-  host de imágenes rechaza a los fetchers de Telegram si se le pasa la URL.
+  `content:encoded`), alojada en un host que ni Telegram ni el Worker en una
+  ejecución de cron logran alcanzar. Por eso la URL se reescribe a través de
+  `i0.wp.com` y es Telegram quien la descarga: el Worker no baja ni sube la
+  imagen.
 - Cambiar de canal, o activar los dos, es cambiar `NOTIFIER` en `wrangler.toml`,
   cargar los secrets correspondientes y volver a desplegar. No hay cambios de
   código.

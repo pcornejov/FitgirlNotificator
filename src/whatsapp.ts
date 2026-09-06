@@ -78,7 +78,7 @@ export async function sendWhatsAppNotification(
   }
 
   await deliver(
-    { url: buildRequestUrl(phone, apiKey, formatMessage(release, isUpdate)) },
+    buildRequestUrl(phone, apiKey, formatMessage(release, isUpdate)),
     CHANNEL,
     options,
     verifyBody,

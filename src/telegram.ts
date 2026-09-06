@@ -5,7 +5,7 @@
  * the chat id of the conversation to notify (see README).
  */
 
-import { DEFAULT_USER_AGENT, type Release } from "./feed";
+import type { Release } from "./feed";
 import { NotificationError, type SendOptions, deliver } from "./notify";
 
 export const TELEGRAM_API_BASE = "https://api.telegram.org";
@@ -45,89 +45,48 @@ export function buildRequestUrl(
   return `${TELEGRAM_API_BASE}/bot${encodeURIComponent(botToken)}/sendMessage?${query}`;
 }
 
-/** Endpoint for the multipart photo upload. */
-export function buildPhotoEndpoint(botToken: string): string {
-  return `${TELEGRAM_API_BASE}/bot${encodeURIComponent(botToken)}/sendPhoto`;
-}
-
 /**
- * Telegram accepts uploads up to 10 MB; staying well under keeps a run cheap
- * and leaves room for the multipart overhead.
- */
-export const MAX_COVER_BYTES = 5 * 1024 * 1024;
-
-/**
- * Timeout for the cover download, deliberately far longer than the one used
- * for the API calls themselves.
+ * Image CDN used to reach the cover art.
  *
- * The image host answers in about a second when the Worker runs from the fetch
- * handler, but takes longer than ten seconds from a scheduled run, which was
- * silently costing every cron notification its cover. The download is not on
- * anyone's critical path, so it can afford to wait.
+ * The image host does not answer the Worker at all from a scheduled run, and
+ * refuses Telegram's fetchers outright, so neither downloading the file nor
+ * handing Telegram the original URL delivers a cover from the cron. Both can
+ * reach this proxy, which fetches the image on their behalf.
  */
-export const COVER_TIMEOUT_MS = 25_000;
+export const IMAGE_PROXY_BASE = "https://i0.wp.com";
 
-/** Above this, the download is worth a log line even when it succeeds. */
-const SLOW_COVER_MS = 4_000;
-
-/** Filename for the upload, derived from the URL so the extension is right. */
-function coverFilename(imageUrl: string): string {
-  const name = imageUrl.split("?")[0]?.split("/").pop() ?? "";
-  return /\.(jpe?g|png|gif|webp)$/i.test(name) ? name : "cover.jpg";
-}
-
-/**
- * Downloads the cover so it can be uploaded to Telegram as a file.
- *
- * Passing the URL to Telegram directly does not work for FitGirl: the image
- * host refuses Telegram's fetchers ("failed to get HTTP URL content"), while
- * serving normal clients fine. Fetching it here and uploading the bytes is
- * what makes covers arrive reliably.
- *
- * Returns null on any problem: a cover is a nice-to-have, never a reason to
- * lose the notification.
- */
-async function fetchCover(imageUrl: string): Promise<Blob | null> {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), COVER_TIMEOUT_MS);
-  const started = Date.now();
-  try {
-    const response = await fetch(imageUrl, {
-      headers: { "User-Agent": DEFAULT_USER_AGENT, Accept: "image/*,*/*;q=0.8" },
-      signal: controller.signal,
-    });
-    if (!response.ok) {
-      console.warn(`Cover download failed with HTTP ${response.status}: ${imageUrl}`);
-      return null;
-    }
-
-    const elapsed = Date.now() - started;
-    if (elapsed > SLOW_COVER_MS) {
-      console.log(`Cover download took ${elapsed}ms: ${imageUrl}`);
-    }
-
-    const contentType = (response.headers.get("Content-Type") ?? "").toLowerCase();
-    if (!contentType.startsWith("image/")) {
-      console.warn(`Cover is not an image (${contentType || "no type"}): ${imageUrl}`);
-      return null;
-    }
-
-    const blob = await response.blob();
-    if (blob.size === 0 || blob.size > MAX_COVER_BYTES) {
-      console.warn(`Cover size out of range (${blob.size} bytes): ${imageUrl}`);
-      return null;
-    }
-    return blob;
-  } catch (error) {
-    console.warn(
-      `Cover download errored after ${Date.now() - started}ms ` +
-        `(limit ${COVER_TIMEOUT_MS}ms): ` +
-        `${error instanceof Error ? error.message : String(error)} — ${imageUrl}`,
-    );
-    return null;
-  } finally {
-    clearTimeout(timer);
+/** Rewrites a cover URL to go through the image proxy. */
+export function proxiedCoverUrl(imageUrl: string): string {
+  const source = new URL(imageUrl);
+  const params = new URLSearchParams(source.search);
+  if (source.protocol === "https:") {
+    // Tells the proxy to fetch the origin over TLS.
+    params.set("ssl", "1");
   }
+
+  const query = params.toString();
+  return `${IMAGE_PROXY_BASE}/${source.host}${source.pathname}${query === "" ? "" : `?${query}`}`;
+}
+
+/**
+ * Builds the sendPhoto request URL, with the message as the photo caption.
+ *
+ * Telegram fetches the image itself, so nothing is downloaded or uploaded here.
+ */
+export function buildPhotoRequestUrl(
+  botToken: string,
+  chatId: string,
+  photoUrl: string,
+  caption: string,
+): string {
+  const query = [
+    `chat_id=${encodeURIComponent(chatId)}`,
+    `photo=${encodeURIComponent(photoUrl)}`,
+    `caption=${encodeURIComponent(caption)}`,
+    "parse_mode=HTML",
+  ].join("&");
+
+  return `${TELEGRAM_API_BASE}/bot${encodeURIComponent(botToken)}/sendPhoto?${query}`;
 }
 
 /**
@@ -180,30 +139,22 @@ export async function sendTelegramNotification(
   const message = formatMessage(release, isUpdate);
 
   if (release.imageUrl !== undefined && release.imageUrl !== "") {
-    const cover = await fetchCover(release.imageUrl);
-    if (cover !== null) {
-      const form = new FormData();
-      form.set("chat_id", chatId);
-      form.set("caption", message);
-      form.set("parse_mode", "HTML");
-      form.set("photo", cover, coverFilename(release.imageUrl));
-
-      try {
-        await deliver(
-          { url: buildPhotoEndpoint(botToken), method: "POST", body: form },
-          CHANNEL,
-          options,
-          verifyBody,
-        );
-        return;
-      } catch (error) {
-        console.warn(
-          `Cover upload rejected for ${release.id}, falling back to text: ` +
-            `${error instanceof Error ? error.message : String(error)}`,
-        );
-      }
+    try {
+      await deliver(
+        buildPhotoRequestUrl(botToken, chatId, proxiedCoverUrl(release.imageUrl), message),
+        CHANNEL,
+        options,
+        verifyBody,
+      );
+      return;
+    } catch (error) {
+      // A cover is a nice-to-have and never costs the alert.
+      console.warn(
+        `Cover rejected for ${release.id}, falling back to text: ` +
+          `${error instanceof Error ? error.message : String(error)}`,
+      );
     }
   }
 
-  await deliver({ url: buildRequestUrl(botToken, chatId, message) }, CHANNEL, options, verifyBody);
+  await deliver(buildRequestUrl(botToken, chatId, message), CHANNEL, options, verifyBody);
 }

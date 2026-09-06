@@ -55,16 +55,13 @@ function isNotificationUrl(url: URL): boolean {
 }
 
 /**
- * The message text, whichever channel and shape produced the request: a query
- * parameter for sendMessage/CallMeBot, a multipart caption for sendPhoto.
+ * The message text, whichever shape produced the request: `text` for
+ * sendMessage and CallMeBot, `caption` for sendPhoto.
  */
 function textOf(sent: Sent): string {
-  const fromQuery = sent.url.searchParams.get("text");
-  if (fromQuery !== null) {
-    return fromQuery;
-  }
-  const body = sent.init?.body;
-  return body instanceof FormData ? String(body.get("caption") ?? "") : "";
+  return (
+    sent.url.searchParams.get("text") ?? sent.url.searchParams.get("caption") ?? ""
+  );
 }
 
 /**
@@ -99,14 +96,6 @@ function scenario(
 
     if (url.href === FEED_URL) {
       return new Response(FITGIRL_FEED_XML, { status: 200 });
-    }
-
-    // Cover art embedded in the fixture.
-    if (url.hostname.endsWith("imageban.ru")) {
-      return new Response(new Uint8Array(2048), {
-        status: 200,
-        headers: { "Content-Type": "image/jpeg" },
-      });
     }
 
     throw new Error(`Unexpected fetch to ${url.href}`);
@@ -501,12 +490,6 @@ describe("updated repacks", () => {
       const url = new URL(String(input));
       if (url.href === FEED_URL) {
         return new Response(REPUBLISHED_XML, { status: 200 });
-      }
-      if (url.hostname.endsWith("imageban.ru")) {
-        return new Response(new Uint8Array(2048), {
-          status: 200,
-          headers: { "Content-Type": "image/jpeg" },
-        });
       }
       notified().push({ url, init });
       return new Response(

@@ -1,12 +1,13 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Release } from "../src/feed";
-import { DEFAULT_TIMEOUT_MS, NotificationError } from "../src/notify";
+import { NotificationError } from "../src/notify";
 import {
-  COVER_TIMEOUT_MS,
-  MAX_COVER_BYTES,
+  IMAGE_PROXY_BASE,
   TELEGRAM_API_BASE,
+  buildPhotoRequestUrl,
   buildRequestUrl,
   escapeHtml,
+  proxiedCoverUrl,
   formatMessage,
   sendTelegramNotification,
 } from "../src/telegram";
@@ -190,188 +191,109 @@ describe("sendTelegramNotification", () => {
   });
 });
 
+describe("proxiedCoverUrl", () => {
+  it("routes the cover through the image proxy", () => {
+    expect(proxiedCoverUrl("https://i7.imageban.ru/out/2026/09/06/abc.jpg")).toBe(
+      `${IMAGE_PROXY_BASE}/i7.imageban.ru/out/2026/09/06/abc.jpg?ssl=1`,
+    );
+  });
+
+  it("asks the proxy for TLS only when the origin is https", () => {
+    expect(proxiedCoverUrl("http://img.example/a.jpg")).toBe(
+      `${IMAGE_PROXY_BASE}/img.example/a.jpg`,
+    );
+  });
+
+  it("preserves an existing query string", () => {
+    const proxied = proxiedCoverUrl("https://img.example/a.jpg?w=1&h=2");
+    const params = new URL(proxied).searchParams;
+    expect(params.get("w")).toBe("1");
+    expect(params.get("h")).toBe("2");
+    expect(params.get("ssl")).toBe("1");
+  });
+});
+
 describe("cover images", () => {
-  const COVER_URL = "https://i2.imageban.ru/out/2026/09/01/cover.jpg";
+  const COVER_URL = "https://i2.imageban.ru/out/2026/09/06/cover.jpg";
   const WITH_IMAGE: Release = { ...RELEASE, imageUrl: COVER_URL };
 
-  interface CoverOptions {
-    coverStatus?: number;
-    coverType?: string;
-    coverBytes?: number;
-    telegramStatus?: number;
-  }
-
-  /**
-   * Routes the image host and the Telegram API on one fetch mock, so the test
-   * sees exactly which calls the sender makes and in what order.
-   */
-  function mockCoverFlow(opts: CoverOptions = {}): ReturnType<typeof vi.fn> {
-    const impl = vi.fn(async (input: string | URL, init?: RequestInit) => {
-      const url = String(input);
-
-      if (url === COVER_URL) {
-        const status = opts.coverStatus ?? 200;
-        if (status !== 200) {
-          return new Response("nope", { status });
-        }
-        return new Response(new Uint8Array(opts.coverBytes ?? 1024), {
-          status: 200,
-          headers: { "Content-Type": opts.coverType ?? "image/jpeg" },
-        });
-      }
-
-      const status = url.includes("/sendPhoto") ? (opts.telegramStatus ?? 200) : 200;
-      return new Response(JSON.stringify({ ok: status === 200, description: "nope" }), {
-        status,
+  function mockTelegram(photoStatus = 200): ReturnType<typeof vi.fn> {
+    const impl = vi.fn(async (input: string | URL) => {
+      const ok = !String(input).includes("/sendPhoto") || photoStatus === 200;
+      return new Response(JSON.stringify({ ok, description: "nope" }), {
+        status: String(input).includes("/sendPhoto") ? photoStatus : 200,
         headers: { "Content-Type": "application/json" },
       });
-      void init;
     });
     vi.stubGlobal("fetch", impl);
     return impl;
   }
 
-  function callUrls(mock: ReturnType<typeof vi.fn>): string[] {
-    return mock.mock.calls.map((call) => String(call[0]));
-  }
+  it("hands Telegram the proxied URL and downloads nothing itself", async () => {
+    const fetchMock = mockTelegram();
 
-  it("downloads the cover and uploads it as multipart", async () => {
-    const fetchMock = mockCoverFlow();
-    vi.spyOn(console, "warn").mockImplementation(() => {});
+    await sendTelegramNotification(TOKEN, CHAT_ID, WITH_IMAGE, false, {
+      sleep: async () => {},
+    });
 
-    await sendTelegramNotification(TOKEN, CHAT_ID, WITH_IMAGE, false, { sleep: async () => {} });
-
-    const urls = callUrls(fetchMock);
-    expect(urls[0]).toBe(COVER_URL);
-    expect(urls[1]).toContain("/sendPhoto");
-    expect(urls[1]).not.toContain("?");
-
-    const init = fetchMock.mock.calls[1]?.[1] as RequestInit;
-    expect(init.method).toBe("POST");
-    const form = init.body as FormData;
-    expect(form.get("chat_id")).toBe(CHAT_ID);
-    expect(form.get("caption")).toBe(formatMessage(WITH_IMAGE));
-    expect(form.get("parse_mode")).toBe("HTML");
-    expect(form.get("photo")).toBeInstanceOf(Blob);
+    // Exactly one request, to Telegram: the image host is never contacted.
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const url = new URL(String(fetchMock.mock.calls[0]?.[0]));
+    expect(url.origin).toBe(TELEGRAM_API_BASE);
+    expect(url.pathname).toContain("/sendPhoto");
+    expect(url.searchParams.get("photo")).toBe(proxiedCoverUrl(COVER_URL));
+    expect(url.searchParams.get("caption")).toBe(formatMessage(WITH_IMAGE));
   });
 
-  it("passes the URL to Telegram nowhere: the host blocks its fetchers", async () => {
-    const fetchMock = mockCoverFlow();
+  it("never sends the original host URL, which Telegram cannot fetch", async () => {
+    const fetchMock = mockTelegram();
 
-    await sendTelegramNotification(TOKEN, CHAT_ID, WITH_IMAGE, false, { sleep: async () => {} });
+    await sendTelegramNotification(TOKEN, CHAT_ID, WITH_IMAGE, false, {
+      sleep: async () => {},
+    });
 
-    // The cover URL must never appear inside a Telegram request.
-    const telegramCalls = callUrls(fetchMock).filter((u) => u.includes("api.telegram.org"));
-    expect(telegramCalls.some((u) => u.includes(encodeURIComponent(COVER_URL)))).toBe(false);
+    expect(String(fetchMock.mock.calls[0]?.[0])).not.toContain(
+      encodeURIComponent(COVER_URL),
+    );
   });
 
   it("uses sendMessage when the release has no cover", async () => {
-    const fetchMock = mockCoverFlow();
+    const fetchMock = mockTelegram();
 
     await sendTelegramNotification(TOKEN, CHAT_ID, RELEASE, false, { sleep: async () => {} });
 
-    expect(callUrls(fetchMock)).toHaveLength(1);
-    expect(callUrls(fetchMock)[0]).toContain("/sendMessage");
+    expect(String(fetchMock.mock.calls[0]?.[0])).toContain("/sendMessage");
   });
 
-  it("falls back to text when the cover cannot be downloaded", async () => {
-    const fetchMock = mockCoverFlow({ coverStatus: 404 });
-
-    await sendTelegramNotification(TOKEN, CHAT_ID, WITH_IMAGE, false, { sleep: async () => {} });
-
-    const urls = callUrls(fetchMock);
-    expect(urls[0]).toBe(COVER_URL);
-    expect(urls[1]).toContain("/sendMessage");
-  });
-
-  it("falls back to text when the cover is not an image", async () => {
-    const fetchMock = mockCoverFlow({ coverType: "text/html" });
-
-    await sendTelegramNotification(TOKEN, CHAT_ID, WITH_IMAGE, false, { sleep: async () => {} });
-
-    expect(callUrls(fetchMock)[1]).toContain("/sendMessage");
-  });
-
-  it("falls back to text when the cover exceeds the size cap", async () => {
-    const fetchMock = mockCoverFlow({ coverBytes: MAX_COVER_BYTES + 1 });
-
-    await sendTelegramNotification(TOKEN, CHAT_ID, WITH_IMAGE, false, { sleep: async () => {} });
-
-    expect(callUrls(fetchMock)[1]).toContain("/sendMessage");
-  });
-
-  it("falls back to text when Telegram rejects the upload", async () => {
-    const fetchMock = mockCoverFlow({ telegramStatus: 400 });
+  it("falls back to text when Telegram rejects the photo", async () => {
     vi.spyOn(console, "warn").mockImplementation(() => {});
+    const fetchMock = mockTelegram(400);
 
-    await sendTelegramNotification(TOKEN, CHAT_ID, WITH_IMAGE, false, { sleep: async () => {} });
+    await sendTelegramNotification(TOKEN, CHAT_ID, WITH_IMAGE, false, {
+      sleep: async () => {},
+    });
 
-    const urls = callUrls(fetchMock);
-    expect(urls[1]).toContain("/sendPhoto");
-    expect(urls[2]).toContain("/sendMessage");
+    expect(String(fetchMock.mock.calls[0]?.[0])).toContain("/sendPhoto");
+    expect(String(fetchMock.mock.calls[1]?.[0])).toContain("/sendMessage");
   });
 
-  it("still delivers when the cover host hangs", async () => {
-    const impl = vi.fn(async (input: string | URL) => {
-      if (String(input) === COVER_URL) {
-        throw new Error("connection reset");
-      }
-      return new Response(JSON.stringify({ ok: true }), { status: 200 });
-    });
-    vi.stubGlobal("fetch", impl);
+  it("carries the update heading into the caption", async () => {
+    const fetchMock = mockTelegram();
 
-    await sendTelegramNotification(TOKEN, CHAT_ID, WITH_IMAGE, false, { sleep: async () => {} });
+    await sendTelegramNotification(TOKEN, CHAT_ID, WITH_IMAGE, true, { sleep: async () => {} });
 
-    expect(String(impl.mock.calls[1]?.[0])).toContain("/sendMessage");
+    const caption = new URL(String(fetchMock.mock.calls[0]?.[0])).searchParams.get("caption");
+    expect(caption).toContain("actualizado");
   });
 });
 
-describe("cover download timeout", () => {
-  const COVER_URL = "https://i2.imageban.ru/out/2026/09/06/cover.jpg";
-  const WITH_IMAGE: Release = { ...RELEASE, imageUrl: COVER_URL };
-
-  it("is far longer than the API timeout, since a scheduled run is slower", () => {
-    // The failure this guards against: a cron run aborting the download at the
-    // API timeout and silently falling back to text.
-    expect(COVER_TIMEOUT_MS).toBeGreaterThan(DEFAULT_TIMEOUT_MS * 2);
-  });
-
-  it("falls back to text when the download is aborted", async () => {
-    vi.spyOn(console, "warn").mockImplementation(() => {});
-    const impl = vi.fn(async (input: string | URL) => {
-      if (String(input) === COVER_URL) {
-        throw new DOMException("The operation was aborted", "AbortError");
-      }
-      return new Response(JSON.stringify({ ok: true }), { status: 200 });
-    });
-    vi.stubGlobal("fetch", impl);
-
-    await sendTelegramNotification(TOKEN, CHAT_ID, WITH_IMAGE, false, {
-      sleep: async () => {},
-    });
-
-    expect(String(impl.mock.calls[1]?.[0])).toContain("/sendMessage");
-  });
-
-  it("logs the elapsed time and the limit when the download aborts", async () => {
-    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async (input: string | URL) => {
-        if (String(input) === COVER_URL) {
-          throw new DOMException("The operation was aborted", "AbortError");
-        }
-        return new Response(JSON.stringify({ ok: true }), { status: 200 });
-      }),
+describe("buildPhotoRequestUrl", () => {
+  it("encodes the photo URL and the caption", () => {
+    const url = new URL(
+      buildPhotoRequestUrl(TOKEN, CHAT_ID, "https://i0.wp.com/a/b.jpg?ssl=1", "hola & adiós"),
     );
-
-    await sendTelegramNotification(TOKEN, CHAT_ID, WITH_IMAGE, false, {
-      sleep: async () => {},
-    });
-
-    const message = String(warn.mock.calls[0]?.[0]);
-    expect(message).toContain("aborted");
-    expect(message).toContain(String(COVER_TIMEOUT_MS));
-    expect(message).toContain(COVER_URL);
+    expect(url.searchParams.get("photo")).toBe("https://i0.wp.com/a/b.jpg?ssl=1");
+    expect(url.searchParams.get("caption")).toBe("hola & adiós");
+    expect(url.searchParams.get("parse_mode")).toBe("HTML");
   });
 });

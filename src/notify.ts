@@ -30,13 +30,6 @@ export class NotificationError extends Error {
   }
 }
 
-/** What to send. A body implies POST (used to upload media). */
-export interface DeliveryRequest {
-  url: string;
-  method?: "GET" | "POST";
-  body?: FormData;
-}
-
 /** A 5xx (or a timeout / network drop) is worth exactly one retry; a 4xx is not. */
 export function isTransientStatus(status: number): boolean {
   return status >= 500 || status === 408 || status === 429;
@@ -46,21 +39,11 @@ function defaultSleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-async function attempt(
-  request: DeliveryRequest,
-  timeoutMs: number,
-): Promise<Response> {
+async function attempt(url: string, timeoutMs: number): Promise<Response> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    const init: RequestInit = {
-      method: request.method ?? "GET",
-      signal: controller.signal,
-    };
-    if (request.body !== undefined) {
-      init.body = request.body;
-    }
-    return await fetch(request.url, init);
+    return await fetch(url, { method: "GET", signal: controller.signal });
   } finally {
     clearTimeout(timer);
   }
@@ -75,7 +58,7 @@ async function attempt(
  * skip `markSeen` and retry the release on the next scheduled run.
  */
 export async function deliver(
-  request: DeliveryRequest,
+  url: string,
   channel: string,
   options: SendOptions = {},
   verify?: (response: Response) => Promise<string | null>,
@@ -90,7 +73,7 @@ export async function deliver(
   for (let n = 1; n <= maxAttempts; n += 1) {
     let response: Response;
     try {
-      response = await attempt(request, timeoutMs);
+      response = await attempt(url, timeoutMs);
     } catch (cause) {
       // Network failures and timeouts are transient by definition.
       lastError = new NotificationError(
