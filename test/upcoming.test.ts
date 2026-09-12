@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { parseFeed } from "../src/feed";
 import {
+  MAX_LISTED,
   formatUpcomingMessage,
   isUpcomingPost,
   newEntries,
@@ -84,23 +85,45 @@ describe("newEntries", () => {
     expect(newEntries(["a"], ["a", "b"])).toEqual([]);
   });
 });
-
 describe("formatUpcomingMessage", () => {
-  it("bullets the titles under a heading", () => {
-    expect(formatUpcomingMessage(["A", "B"])).toBe("🔜 Nuevos en próximos repacks\n\n• A\n• B");
+  const ALL = ["A", "B", "C"];
+
+  it("leads with the additions, then lists everything still coming", () => {
+    expect(formatUpcomingMessage(["C"], ALL)).toBe(
+      "🔜 Nuevo en próximos repacks\n\n🆕 C\n\n📋 Todos los próximos (3)\n• A\n• B\n• C",
+    );
   });
 
-  it("uses the singular heading for one title", () => {
-    expect(formatUpcomingMessage(["A"])).toContain("🔜 Nuevo en próximos repacks");
+  it("uses the plural heading and marks every addition", () => {
+    const message = formatUpcomingMessage(["B", "C"], ALL);
+    expect(message).toContain("🔜 Nuevos en próximos repacks");
+    expect(message).toContain("🆕 B");
+    expect(message).toContain("🆕 C");
+  });
+
+  it("counts the whole list, not just the additions", () => {
+    expect(formatUpcomingMessage(["C"], ALL)).toContain("Todos los próximos (3)");
   });
 
   it("applies the channel's own escaping and emphasis", () => {
     const message = formatUpcomingMessage(
       ["A & B"],
+      ["A & B"],
       (v) => v.replace(/&/g, "&amp;"),
       (v) => `<b>${v}</b>`,
     );
     expect(message).toContain("<b>🔜 Nuevo en próximos repacks</b>");
+    expect(message).toContain("🆕 A &amp; B");
     expect(message).toContain("• A &amp; B");
+  });
+
+  it("truncates an unexpectedly long list rather than overflowing the message", () => {
+    const many = Array.from({ length: MAX_LISTED + 5 }, (_, i) => `Game ${i}`);
+
+    const message = formatUpcomingMessage(["Game 0"], many);
+
+    expect(message).toContain(`Todos los próximos (${many.length})`);
+    expect(message).toContain("… y 5 más");
+    expect(message).not.toContain(`• Game ${MAX_LISTED}`);
   });
 });

@@ -269,10 +269,11 @@ El Cron Trigger `*/15 * * * *` queda activo automáticamente tras el deploy.
   averiado provocara reenvíos cada 15 minutos en los que sí funcionan. Si
   fallan todos, no se marca y se reintenta en la corrida siguiente.
 - CallMeBot solo envía texto: las portadas llegan únicamente por Telegram.
-- El post "Upcoming Repacks" se edita constantemente, así que no se reenvía
-  entero en cada cambio: se guarda la lista en KV y solo se anuncian los
-  títulos que aparecen por primera vez. La primera corrida la registra sin
-  notificar, para no disparar la lista completa de golpe.
+- El post "Upcoming Repacks" se edita constantemente, así que no se anuncia en
+  cada cambio: se guarda la lista en KV y solo se avisa cuando aparece un
+  título nuevo. El mensaje lleva las altas marcadas con 🆕 y debajo la lista
+  completa, como recordatorio de todo lo que viene. La primera corrida
+  registra la lista sin notificar, para no dispararla entera de golpe.
 - La primera ejecución notificará todos los releases presentes en el feed (hasta
   `MAX_NOTIFICATIONS_PER_RUN`). Para partir en silencio, ejecuta primero el
   dry-run y precarga las claves con

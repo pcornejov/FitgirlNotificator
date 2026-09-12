@@ -39,14 +39,15 @@ export function formatMessage(release: Release, isUpdate = false): string {
 export async function sendUpcomingNotification(
   botToken: string,
   chatId: string,
-  titles: string[],
+  added: string[],
+  all: string[],
   options: SendOptions = {},
 ): Promise<void> {
   if (botToken === "" || chatId === "") {
     throw new NotificationError(CHANNEL, "Missing Telegram bot token or chat id", 0);
   }
 
-  const message = formatUpcomingMessage(titles, escapeHtml, (t) => `<b>${t}</b>`);
+  const message = formatUpcomingMessage(added, all, escapeHtml, (t) => `<b>${t}</b>`);
   await deliver(buildRequestUrl(botToken, chatId, message), CHANNEL, options, verifyBody);
 }
 

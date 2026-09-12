@@ -55,14 +55,15 @@ export function formatMessage(release: Release, isUpdate = false): string {
 export async function sendUpcomingWhatsApp(
   phone: string,
   apiKey: string,
-  titles: string[],
+  added: string[],
+  all: string[],
   options: SendOptions = {},
 ): Promise<void> {
   if (phone === "" || apiKey === "") {
     throw new NotificationError(CHANNEL, "Missing CallMeBot phone or API key", 0);
   }
 
-  const message = formatUpcomingMessage(titles, undefined, (t) => `*${t}*`);
+  const message = formatUpcomingMessage(added, all, undefined, (t) => `*${t}*`);
   await deliver(buildRequestUrl(phone, apiKey, message), CHANNEL, options, verifyBody);
 }
 

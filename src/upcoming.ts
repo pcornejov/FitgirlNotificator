@@ -70,15 +70,37 @@ export function newEntries(current: string[], previous: string[]): string[] {
   return current.filter((title) => !before.has(title));
 }
 
-/** The message announcing newly listed games. */
+/**
+ * Upper bound on the reminder list, so an unexpectedly long post cannot push
+ * the message past what the channels accept.
+ */
+export const MAX_LISTED = 40;
+
+/**
+ * The announcement: what was just added, then the full list as a reminder of
+ * everything still on the way.
+ *
+ * The additions appear in both blocks on purpose — the first is the news, the
+ * second is the standing list.
+ */
 export function formatUpcomingMessage(
-  titles: string[],
+  added: string[],
+  all: string[],
   escape: (value: string) => string = (value) => value,
   bold: (value: string) => string = (value) => value,
 ): string {
   const heading = bold(
-    titles.length === 1 ? "🔜 Nuevo en próximos repacks" : "🔜 Nuevos en próximos repacks",
+    added.length === 1 ? "🔜 Nuevo en próximos repacks" : "🔜 Nuevos en próximos repacks",
   );
-  const list = titles.map((title) => `• ${escape(title)}`).join("\n");
-  return `${heading}\n\n${list}`;
+  const news = added.map((title) => `🆕 ${escape(title)}`).join("\n");
+
+  const shown = all.slice(0, MAX_LISTED);
+  const omitted = all.length - shown.length;
+  const reminder = [
+    bold(`📋 Todos los próximos (${all.length})`),
+    ...shown.map((title) => `• ${escape(title)}`),
+    ...(omitted > 0 ? [`… y ${omitted} más`] : []),
+  ].join("\n");
+
+  return `${heading}\n\n${news}\n\n${reminder}`;
 }

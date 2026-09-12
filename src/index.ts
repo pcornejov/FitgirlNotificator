@@ -282,7 +282,7 @@ async function announceUpcoming(
   let delivered = 0;
   for (const notifier of notifiers) {
     try {
-      await notifier.sendUpcoming(added, sendOptions);
+      await notifier.sendUpcoming(added, listed, sendOptions);
       delivered += 1;
     } catch (error) {
       result.failed.push({

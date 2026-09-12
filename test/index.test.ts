@@ -647,8 +647,11 @@ describe("upcoming repacks", () => {
     expect(result.upcomingAdded).toEqual(["Dante’s Bloodline"]);
     const messages = upcomingMessages(notified());
     expect(messages).toHaveLength(1);
-    expect(messages[0]).toContain("Dante’s Bloodline");
-    expect(messages[0]).not.toContain("Tiny Bakery");
+    expect(messages[0]).toContain("🆕 Dante’s Bloodline");
+    // The full list rides along as a reminder of everything still coming.
+    expect(messages[0]).toContain("Todos los próximos (3)");
+    expect(messages[0]).toContain("• Tiny Bakery");
+    expect(messages[0]).not.toContain("🆕 Tiny Bakery");
   });
 
   it("says nothing when the list has not changed", async () => {

@@ -15,8 +15,11 @@ export const DEFAULT_CHANNEL: ChannelName = "telegram";
 export interface Notifier {
   readonly channel: ChannelName;
   send(release: Release, isUpdate: boolean, options?: SendOptions): Promise<void>;
-  /** Announces games newly added to the upcoming-repacks list. */
-  sendUpcoming(titles: string[], options?: SendOptions): Promise<void>;
+  /**
+   * Announces games newly added to the upcoming-repacks list, alongside the
+   * full list as a reminder of everything still on the way.
+   */
+  sendUpcoming(added: string[], all: string[], options?: SendOptions): Promise<void>;
 }
 
 /** Credentials needed by the channels, as they arrive from the environment. */
@@ -113,8 +116,8 @@ function buildNotifier(channel: ChannelName, config: NotifierConfig): Notifier {
       channel,
       send: (release, isUpdate, options) =>
         sendTelegramNotification(token, chatId, release, isUpdate, options ?? {}),
-      sendUpcoming: (titles, options) =>
-        sendUpcomingNotification(token, chatId, titles, options ?? {}),
+      sendUpcoming: (added, all, options) =>
+        sendUpcomingNotification(token, chatId, added, all, options ?? {}),
     };
   }
 
@@ -129,7 +132,7 @@ function buildNotifier(channel: ChannelName, config: NotifierConfig): Notifier {
     channel,
     send: (release, isUpdate, options) =>
       sendWhatsAppNotification(phone, apiKey, release, isUpdate, options ?? {}),
-    sendUpcoming: (titles, options) =>
-      sendUpcomingWhatsApp(phone, apiKey, titles, options ?? {}),
+    sendUpcoming: (added, all, options) =>
+      sendUpcomingWhatsApp(phone, apiKey, added, all, options ?? {}),
   };
 }
