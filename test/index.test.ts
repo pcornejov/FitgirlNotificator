@@ -621,7 +621,7 @@ describe("multi-channel delivery", () => {
 });
 
 describe("upcoming repacks", () => {
-  const LISTED = ["Tiny Bakery", "Sunken Engine", "Dante’s Bloodline"];
+  const LISTED = ["Tiny Bakery", "Sunken Engine", "Dante’s Bloodline", "Cyber Drift 2"];
 
   function upcomingMessages(sent: Sent[]): string[] {
     return sent.map((s) => textOf(s)).filter((t) => t.includes("próximos repacks"));
@@ -707,8 +707,8 @@ describe("upcoming repacks", () => {
     const result = await dryRun(env);
 
     expect(result.upcoming.tracking).toBe(true);
-    expect(result.upcoming.listed).toBe(3);
-    expect(result.upcoming.wouldAnnounce).toEqual(["Dante’s Bloodline"]);
+    expect(result.upcoming.listed).toBe(4);
+    expect(result.upcoming.wouldAnnounce).toEqual(["Dante’s Bloodline", "Cyber Drift 2"]);
     expect(kv.putCalls).toBe(0);
     expect(notified()).toHaveLength(0);
   });
@@ -721,7 +721,82 @@ describe("upcoming dry run before a baseline exists", () => {
     const result = await dryRun(env);
 
     expect(result.upcoming.tracking).toBe(false);
-    expect(result.upcoming.listed).toBe(3);
+    expect(result.upcoming.listed).toBe(4);
     expect(result.upcoming.wouldAnnounce).toEqual([]);
+  });
+});
+
+describe("upcoming list alongside releases", () => {
+  function upcomingMessages(sent: Sent[]): string[] {
+    return sent.map((s) => textOf(s)).filter((t) => t.includes("Todos los próximos"));
+  }
+
+  /** A baseline that matches the fixture, so nothing counts as an addition. */
+  function seedCurrentList(kv: MemoryKV): void {
+    kv.entries.set(UPCOMING_KEY, {
+      value: JSON.stringify(["Tiny Bakery", "Sunken Engine", "Dante’s Bloodline", "Cyber Drift 2"]),
+    });
+  }
+
+  it("sends the list as a reminder when a release goes out", async () => {
+    const { env, kv, notified } = scenario();
+    seedCurrentList(kv);
+
+    const result = await runNotifier(env, { sleep: async () => {} }, async () => {});
+
+    expect(result.sent).toEqual(RELEASE_IDS);
+    expect(result.upcomingSent).toBe(true);
+    expect(result.upcomingAdded).toEqual([]);
+    const messages = upcomingMessages(notified());
+    expect(messages).toHaveLength(1);
+    // No additions, so the message is the standing list on its own.
+    expect(messages[0]).not.toContain("🆕");
+  });
+
+  it("drops the game it just published from the list", async () => {
+    const { env, kv, notified } = scenario();
+    seedCurrentList(kv);
+
+    await runNotifier(env, { sleep: async () => {} }, async () => {});
+
+    const message = upcomingMessages(notified())[0] as string;
+    // "Cyber Drift 2" was released in this run, so it is no longer coming.
+    expect(message).not.toContain("Cyber Drift 2");
+    expect(message).toContain("Todos los próximos (3)");
+    expect(message).toContain("• Tiny Bakery");
+  });
+
+  it("sends one list even when several releases go out", async () => {
+    const { env, kv, notified } = scenario();
+    seedCurrentList(kv);
+
+    await runNotifier(env, { sleep: async () => {} }, async () => {});
+
+    expect(upcomingMessages(notified())).toHaveLength(1);
+  });
+
+  it("stays silent when nothing was released and nothing was added", async () => {
+    const { env, kv, notified } = scenario();
+    seedCurrentList(kv);
+    // Mark both releases as already notified.
+    for (const id of RELEASE_IDS) kv.seed(vkey(id), id);
+
+    const result = await runNotifier(env, { sleep: async () => {} }, async () => {});
+
+    expect(result.sent).toEqual([]);
+    expect(result.upcomingSent).toBe(false);
+    expect(upcomingMessages(notified())).toEqual([]);
+  });
+
+  it("combines additions and the reminder into a single message", async () => {
+    const { env, kv, notified } = scenario();
+    kv.entries.set(UPCOMING_KEY, { value: JSON.stringify(["Tiny Bakery", "Sunken Engine"]) });
+
+    await runNotifier(env, { sleep: async () => {} }, async () => {});
+
+    const messages = upcomingMessages(notified());
+    expect(messages).toHaveLength(1);
+    expect(messages[0]).toContain("🆕 Dante’s Bloodline");
+    expect(messages[0]).toContain("📋");
   });
 });

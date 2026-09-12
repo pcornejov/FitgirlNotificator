@@ -271,9 +271,12 @@ El Cron Trigger `*/15 * * * *` queda activo automáticamente tras el deploy.
 - CallMeBot solo envía texto: las portadas llegan únicamente por Telegram.
 - El post "Upcoming Repacks" se edita constantemente, así que no se anuncia en
   cada cambio: se guarda la lista en KV y solo se avisa cuando aparece un
-  título nuevo. El mensaje lleva las altas marcadas con 🆕 y debajo la lista
-  completa, como recordatorio de todo lo que viene. La primera corrida
-  registra la lista sin notificar, para no dispararla entera de golpe.
+  título nuevo, y también cada vez que sale un release, como recordatorio de
+  lo que queda por venir. Las altas van marcadas con 🆕 y debajo la lista
+  completa. Un juego publicado en esa misma corrida se descarta de la lista
+  aunque el sitio todavía no lo haya quitado — los títulos se emparejan por su
+  parte identificativa, ignorando versión y DLCs. Como mucho un mensaje de
+  próximos por corrida. La primera corrida registra la lista sin notificar.
 - La primera ejecución notificará todos los releases presentes en el feed (hasta
   `MAX_NOTIFICATIONS_PER_RUN`). Para partir en silencio, ejecuta primero el
   dry-run y precarga las claves con

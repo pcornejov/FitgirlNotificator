@@ -40,6 +40,7 @@ export const FITGIRL_FEED_XML = `<?xml version="1.0" encoding="UTF-8"?>
       <span style="color: #339966;">⇢ Tiny Bakery</span><br />
       <span style="color: #339966;">⇢ Sunken Engine</span><br />
       <span style="color: #339966;">⇢ Dante&#8217;s Bloodline</span><br />
+      <span style="color: #339966;">⇢ Cyber Drift 2</span><br />
     </div>]]></content:encoded>
   </item>
   <item>

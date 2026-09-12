@@ -28,13 +28,14 @@ import {
 import type { SendOptions } from "./notify";
 import {
   DEFAULT_SEEN_TTL_DAYS,
+  type PendingRelease,
   type SeenReleasesKV,
   filterUnseen,
   markSeen,
   readUpcoming,
   writeUpcoming,
 } from "./store";
-import { newEntries, parseUpcomingTitles } from "./upcoming";
+import { excludeReleased, newEntries, parseUpcomingTitles } from "./upcoming";
 
 export interface Env {
   /** KV namespace holding the ids of releases already notified. */
@@ -87,6 +88,8 @@ export interface RunResult {
   updated: string[];
   /** Games newly added to the upcoming-repacks list and announced. */
   upcomingAdded: string[];
+  /** Whether the upcoming list went out this run, as news or as a reminder. */
+  upcomingSent: boolean;
   failed: Array<{ id: string; channel?: ChannelName; error: string }>;
 }
 
@@ -181,6 +184,7 @@ export async function runNotifier(
     sent: [],
     updated: [],
     upcomingAdded: [],
+    upcomingSent: false,
     failed: [],
   };
 
@@ -230,24 +234,29 @@ export async function runNotifier(
     }
   }
 
-  await announceUpcoming(env, xml, notifiers, result, sendOptions, pause);
+  await announceUpcoming(env, xml, notifiers, result, selected, sendOptions, pause);
 
   return result;
 }
 
 /**
- * Announces games newly added to the upcoming-repacks list.
+ * Sends the upcoming-repacks list, as news or as a reminder.
  *
- * The post is edited constantly, so only additions are reported: re-sending
- * the whole list on every edit would bury the releases themselves. The stored
- * list is updated only once an announcement went out, so a delivery failure
- * retries on the next run instead of losing the additions.
+ * The post is edited constantly, so an edit alone is not worth a message: only
+ * a title appearing for the first time is. The list also rides along whenever
+ * releases went out, so each notification carries what is still on the way —
+ * minus whatever was just published, which the site often has not removed from
+ * the list yet.
+ *
+ * At most one message per run, and the stored list is updated only once
+ * something was delivered, so a failure retries instead of losing additions.
  */
 async function announceUpcoming(
   env: Env,
   xml: string,
   notifiers: Notifier[],
   result: RunResult,
+  selected: PendingRelease[],
   sendOptions: SendOptions,
   pause: (ms: number) => Promise<void>,
 ): Promise<void> {
@@ -269,8 +278,22 @@ async function announceUpcoming(
   }
 
   const added = newEntries(listed, previous);
-  if (added.length === 0) {
-    // Nothing new, but the list may have shrunk: keep the stored copy current.
+  if (added.length === 0 && result.sent.length === 0) {
+    // Nothing new and no release to accompany. Keep the stored copy current,
+    // since the list may have shrunk.
+    await writeUpcoming(listed, env.SEEN_RELEASES, parsePositiveInt(env.SEEN_TTL_DAYS, DEFAULT_SEEN_TTL_DAYS));
+    return;
+  }
+
+  // A game published in this run is no longer upcoming, whether or not the
+  // site has taken it off the list yet.
+  const publishedTitles = selected
+    .filter((p) => result.sent.includes(p.release.id))
+    .map((p) => p.release.title);
+  const stillComing = excludeReleased(listed, publishedTitles);
+  const news = excludeReleased(added, publishedTitles);
+
+  if (news.length === 0 && stillComing.length === 0) {
     await writeUpcoming(listed, env.SEEN_RELEASES, parsePositiveInt(env.SEEN_TTL_DAYS, DEFAULT_SEEN_TTL_DAYS));
     return;
   }
@@ -282,7 +305,7 @@ async function announceUpcoming(
   let delivered = 0;
   for (const notifier of notifiers) {
     try {
-      await notifier.sendUpcoming(added, listed, sendOptions);
+      await notifier.sendUpcoming(news, stillComing, sendOptions);
       delivered += 1;
     } catch (error) {
       result.failed.push({
@@ -298,7 +321,8 @@ async function announceUpcoming(
     return;
   }
 
-  result.upcomingAdded = added;
+  result.upcomingAdded = news;
+  result.upcomingSent = true;
   try {
     await writeUpcoming(listed, env.SEEN_RELEASES, parsePositiveInt(env.SEEN_TTL_DAYS, DEFAULT_SEEN_TTL_DAYS));
   } catch (error) {

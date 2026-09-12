@@ -64,6 +64,53 @@ export function parseUpcomingTitles(xml: string): string[] {
   return [];
 }
 
+/**
+ * Reduces a title to the part that identifies the game.
+ *
+ * The two sides never match literally: the upcoming list says
+ * "Moonlight Peaks, v1.2.7" while the release is published as
+ * "Moonlight Peaks – v1.2.7 + 2 DLCs". Everything from the first version or
+ * bundle marker onwards is dropped, and the rest is reduced to bare words.
+ */
+export function titleKey(title: string): string {
+  return title
+    .toLowerCase()
+    .replace(/[\u2013\u2014]/g, "-")
+    .replace(/[\u2018\u2019]/g, "'")
+    // Version, build and bundle markers, whichever comes first.
+    .split(/,?\s*[-–]\s*v\d|,\s*v\d|\sv\d+\.|\sbuild\s|\s\+\s|\s\(/)[0]!
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
+}
+
+/**
+ * True when a listed title refers to the same game as a published release.
+ *
+ * One side is allowed to be a prefix of the other, since a release often adds
+ * an edition the list omits. A length floor keeps a short name from matching
+ * an unrelated longer one.
+ */
+export function isSameGame(listedTitle: string, releaseTitle: string): boolean {
+  const listed = titleKey(listedTitle);
+  const released = titleKey(releaseTitle);
+  if (listed === "" || released === "") {
+    return false;
+  }
+  if (listed === released) {
+    return true;
+  }
+
+  const [shorter, longer] = listed.length <= released.length ? [listed, released] : [released, listed];
+  return shorter.length >= 8 && longer.startsWith(`${shorter} `);
+}
+
+/** Drops the listed games that these releases have just published. */
+export function excludeReleased(listed: string[], releaseTitles: string[]): string[] {
+  return listed.filter(
+    (title) => !releaseTitles.some((released) => isSameGame(title, released)),
+  );
+}
+
 /** Titles present now that were not present before, in listing order. */
 export function newEntries(current: string[], previous: string[]): string[] {
   const before = new Set(previous);
@@ -89,11 +136,6 @@ export function formatUpcomingMessage(
   escape: (value: string) => string = (value) => value,
   bold: (value: string) => string = (value) => value,
 ): string {
-  const heading = bold(
-    added.length === 1 ? "🔜 Nuevo en próximos repacks" : "🔜 Nuevos en próximos repacks",
-  );
-  const news = added.map((title) => `🆕 ${escape(title)}`).join("\n");
-
   const shown = all.slice(0, MAX_LISTED);
   const omitted = all.length - shown.length;
   const reminder = [
@@ -101,6 +143,17 @@ export function formatUpcomingMessage(
     ...shown.map((title) => `• ${escape(title)}`),
     ...(omitted > 0 ? [`… y ${omitted} más`] : []),
   ].join("\n");
+
+  // With no additions the message is the standing list on its own, which is
+  // what rides along with a release.
+  if (added.length === 0) {
+    return reminder;
+  }
+
+  const heading = bold(
+    added.length === 1 ? "🔜 Nuevo en próximos repacks" : "🔜 Nuevos en próximos repacks",
+  );
+  const news = added.map((title) => `🆕 ${escape(title)}`).join("\n");
 
   return `${heading}\n\n${news}\n\n${reminder}`;
 }

@@ -46,6 +46,7 @@ describe("parseUpcomingTitles", () => {
       "Tiny Bakery",
       "Sunken Engine",
       "Dante’s Bloodline",
+      "Cyber Drift 2",
     ]);
   });
 
