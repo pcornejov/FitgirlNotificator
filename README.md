@@ -39,6 +39,7 @@ cron */15  →  scheduled()  →  fetchLatestReleases()   src/feed.ts      (RSS 
 | `src/notify.ts` | Transporte común: 1 reintento con backoff de 2 s ante 5xx/408/429/timeout, sin reintento ante 4xx, `NotificationError` tipado. |
 | `src/telegram.ts` | Envío por Bot API. Manda la portada con `sendPhoto` vía proxy de imágenes y cae a `sendMessage` si falla. |
 | `src/whatsapp.ts` | Envío por CallMeBot. |
+| `src/upcoming.ts` | Lee la lista de "Upcoming Repacks" del feed y calcula las altas respecto a la corrida anterior. |
 | `src/notifier.ts` | Interfaz `Notifier` y selección de canal según `NOTIFIER`. |
 | `src/index.ts` | Handlers `scheduled` (cron) y `fetch` (dry-run `GET /test`). |
 
@@ -155,6 +156,7 @@ Variables públicas (`[vars]` en `wrangler.toml`):
 | `NOTIFIER` | `telegram` | Canales activos: `telegram`, `callmebot`, o ambos separados por coma (`telegram,callmebot`). |
 | `FEED_URL` | `https://fitgirl-repacks.site/feed/` | Feed RSS a consultar. |
 | `REQUIRE_CATEGORY` | `Lossless Repack` | Solo se notifican posts en esta categoría. `""` desactiva el filtro. |
+| `NOTIFY_UPCOMING` | `true` | Avisa cuando un juego entra a la lista de "Upcoming Repacks". `"false"` lo desactiva. |
 | `MAX_NOTIFICATIONS_PER_RUN` | `5` | Tope de mensajes por ejecución del cron. |
 | `SEEN_TTL_DAYS` | `30` | Días que un release permanece marcado como visto en KV. |
 | `USER_AGENT` | UA de Chrome | Opcional; sobreescribe el User-Agent de navegador usado contra el WAF. |
@@ -267,6 +269,10 @@ El Cron Trigger `*/15 * * * *` queda activo automáticamente tras el deploy.
   averiado provocara reenvíos cada 15 minutos en los que sí funcionan. Si
   fallan todos, no se marca y se reintenta en la corrida siguiente.
 - CallMeBot solo envía texto: las portadas llegan únicamente por Telegram.
+- El post "Upcoming Repacks" se edita constantemente, así que no se reenvía
+  entero en cada cambio: se guarda la lista en KV y solo se anuncian los
+  títulos que aparecen por primera vez. La primera corrida la registra sin
+  notificar, para no disparar la lista completa de golpe.
 - La primera ejecución notificará todos los releases presentes en el feed (hasta
   `MAX_NOTIFICATIONS_PER_RUN`). Para partir en silencio, ejecuta primero el
   dry-run y precarga las claves con

@@ -17,6 +17,8 @@ SEEN_TTL_DAYS = "30"
 # recurring non-release posts ("Upcoming Repacks", "Updates Digest").
 # Set to "" to notify every feed entry.
 REQUIRE_CATEGORY = "Lossless Repack"
+# Announce games added to the site's "Upcoming Repacks" list. "false" disables.
+NOTIFY_UPCOMING = "true"
 
 # Created with: wrangler kv namespace create SEEN_RELEASES
 # The namespace id is an identifier, not a credential: it is meant to be

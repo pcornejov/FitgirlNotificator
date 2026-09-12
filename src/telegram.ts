@@ -6,6 +6,7 @@
  */
 
 import type { Release } from "./feed";
+import { formatUpcomingMessage } from "./upcoming";
 import { NotificationError, type SendOptions, deliver } from "./notify";
 
 export const TELEGRAM_API_BASE = "https://api.telegram.org";
@@ -28,6 +29,25 @@ export function formatMessage(release: Release, isUpdate = false): string {
     : "🎮 <b>Nuevo Release en FitGirl</b>";
 
   return `${heading}\n\n${escapeHtml(release.title)}\n\n🔗 ${escapeHtml(release.link)}`;
+}
+
+/**
+ * Announces games newly added to the upcoming-repacks list.
+ *
+ * @throws {NotificationError} when delivery fails.
+ */
+export async function sendUpcomingNotification(
+  botToken: string,
+  chatId: string,
+  titles: string[],
+  options: SendOptions = {},
+): Promise<void> {
+  if (botToken === "" || chatId === "") {
+    throw new NotificationError(CHANNEL, "Missing Telegram bot token or chat id", 0);
+  }
+
+  const message = formatUpcomingMessage(titles, escapeHtml, (t) => `<b>${t}</b>`);
+  await deliver(buildRequestUrl(botToken, chatId, message), CHANNEL, options, verifyBody);
 }
 
 /** Builds the fully encoded sendMessage request URL. */

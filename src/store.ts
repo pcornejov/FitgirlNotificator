@@ -45,6 +45,41 @@ export function versionKey(release: Release): string {
   return `${release.id}@${stamp}`;
 }
 
+/** Key holding the last seen upcoming-repacks list. */
+export const UPCOMING_KEY = "upcoming:list";
+
+/**
+ * Reads the previously stored upcoming list.
+ *
+ * `null` means nothing has been stored yet, which the caller treats as a first
+ * run: the list is recorded without announcing every title already on it.
+ */
+export async function readUpcoming(kv: SeenReleasesKV): Promise<string[] | null> {
+  const stored = await kv.get(UPCOMING_KEY);
+  if (stored === null) {
+    return null;
+  }
+
+  try {
+    const parsed: unknown = JSON.parse(stored);
+    return Array.isArray(parsed) ? parsed.filter((x): x is string => typeof x === "string") : null;
+  } catch {
+    // Unreadable value: treat it as absent and rewrite it below.
+    return null;
+  }
+}
+
+/** Records the current upcoming list. */
+export async function writeUpcoming(
+  titles: string[],
+  kv: SeenReleasesKV,
+  ttlDays: number = DEFAULT_SEEN_TTL_DAYS,
+): Promise<void> {
+  await kv.put(UPCOMING_KEY, JSON.stringify(titles), {
+    expirationTtl: ttlSecondsFromDays(ttlDays),
+  });
+}
+
 /** Key marking that a post has been notified at all, in any version. */
 export function postKey(release: Release): string {
   return release.id;

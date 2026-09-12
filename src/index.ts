@@ -14,8 +14,9 @@ import {
   DEFAULT_USER_AGENT,
   RELEASE_CATEGORY,
   type Release,
-  fetchLatestReleases,
+  fetchFeed,
   isGameRelease,
+  parseFeed,
 } from "./feed";
 import {
   type ChannelName,
@@ -30,7 +31,10 @@ import {
   type SeenReleasesKV,
   filterUnseen,
   markSeen,
+  readUpcoming,
+  writeUpcoming,
 } from "./store";
+import { newEntries, parseUpcomingTitles } from "./upcoming";
 
 export interface Env {
   /** KV namespace holding the ids of releases already notified. */
@@ -43,6 +47,8 @@ export interface Env {
   USER_AGENT?: string;
   /** Active channel: "telegram" (default) or "callmebot". */
   NOTIFIER?: string;
+  /** Set to "false" to stop announcing additions to the upcoming list. */
+  NOTIFY_UPCOMING?: string;
   /**
    * Category a post must carry to be notified. Defaults to the repack
    * category, which filters out the site's recurring non-release posts.
@@ -79,6 +85,8 @@ export interface RunResult {
   sent: string[];
   /** Subset of `sent` that were updates to a previously notified repack. */
   updated: string[];
+  /** Games newly added to the upcoming-repacks list and announced. */
+  upcomingAdded: string[];
   failed: Array<{ id: string; channel?: ChannelName; error: string }>;
 }
 
@@ -93,6 +101,12 @@ export interface DryRunResult {
   unseen: number;
   wouldNotify: Array<Release & { isUpdate: boolean }>;
   skipped: number;
+  upcoming: {
+    /** False until the first run has recorded a baseline list. */
+    tracking: boolean;
+    listed: number;
+    wouldAnnounce: string[];
+  };
 }
 
 function parsePositiveInt(
@@ -105,6 +119,11 @@ function parsePositiveInt(
 
 function feedUrlOf(env: Env): string {
   return env.FEED_URL !== undefined && env.FEED_URL !== "" ? env.FEED_URL : DEFAULT_FEED_URL;
+}
+
+function upcomingEnabled(env: Env): boolean {
+  // Only an explicit "false" turns it off; anything else keeps it on.
+  return (env.NOTIFY_UPCOMING ?? "").trim().toLowerCase() !== "false";
 }
 
 function requiredCategoryOf(env: Env): string {
@@ -145,7 +164,8 @@ export async function runNotifier(
   const ttlDays = parsePositiveInt(env.SEEN_TTL_DAYS, DEFAULT_SEEN_TTL_DAYS);
 
   // Any failure here aborts the run before a single KV write happens.
-  const fetched = await fetchLatestReleases(feedUrlOf(env), userAgentOf(env));
+  const xml = await fetchFeed(feedUrlOf(env), userAgentOf(env));
+  const fetched = parseFeed(xml);
   const requiredCategory = requiredCategoryOf(env);
   // Filtered before the KV lookup, so non-releases never occupy a key.
   const releases = fetched.filter((release) => isGameRelease(release, requiredCategory));
@@ -160,6 +180,7 @@ export async function runNotifier(
     selected: selected.length,
     sent: [],
     updated: [],
+    upcomingAdded: [],
     failed: [],
   };
 
@@ -209,7 +230,80 @@ export async function runNotifier(
     }
   }
 
+  await announceUpcoming(env, xml, notifiers, result, sendOptions, pause);
+
   return result;
+}
+
+/**
+ * Announces games newly added to the upcoming-repacks list.
+ *
+ * The post is edited constantly, so only additions are reported: re-sending
+ * the whole list on every edit would bury the releases themselves. The stored
+ * list is updated only once an announcement went out, so a delivery failure
+ * retries on the next run instead of losing the additions.
+ */
+async function announceUpcoming(
+  env: Env,
+  xml: string,
+  notifiers: Notifier[],
+  result: RunResult,
+  sendOptions: SendOptions,
+  pause: (ms: number) => Promise<void>,
+): Promise<void> {
+  if (!upcomingEnabled(env)) {
+    return;
+  }
+
+  const listed = parseUpcomingTitles(xml);
+  if (listed.length === 0) {
+    // The post is missing or unparseable; leave the stored list untouched.
+    return;
+  }
+
+  const previous = await readUpcoming(env.SEEN_RELEASES);
+  if (previous === null) {
+    // First run: record the list rather than announcing everything on it.
+    await writeUpcoming(listed, env.SEEN_RELEASES, parsePositiveInt(env.SEEN_TTL_DAYS, DEFAULT_SEEN_TTL_DAYS));
+    return;
+  }
+
+  const added = newEntries(listed, previous);
+  if (added.length === 0) {
+    // Nothing new, but the list may have shrunk: keep the stored copy current.
+    await writeUpcoming(listed, env.SEEN_RELEASES, parsePositiveInt(env.SEEN_TTL_DAYS, DEFAULT_SEEN_TTL_DAYS));
+    return;
+  }
+
+  if (result.sent.length > 0) {
+    await pause(NOTIFY_INTERVAL_MS);
+  }
+
+  let delivered = 0;
+  for (const notifier of notifiers) {
+    try {
+      await notifier.sendUpcoming(added, sendOptions);
+      delivered += 1;
+    } catch (error) {
+      result.failed.push({
+        id: "upcoming",
+        channel: notifier.channel,
+        error: errorMessage(error),
+      });
+      console.error(`${notifier.channel} upcoming announcement failed: ${errorMessage(error)}`);
+    }
+  }
+
+  if (delivered === 0) {
+    return;
+  }
+
+  result.upcomingAdded = added;
+  try {
+    await writeUpcoming(listed, env.SEEN_RELEASES, parsePositiveInt(env.SEEN_TTL_DAYS, DEFAULT_SEEN_TTL_DAYS));
+  } catch (error) {
+    console.error(`KV write failed for the upcoming list: ${errorMessage(error)}`);
+  }
 }
 
 /** Dry run: read-only, never writes KV and never calls the notification API. */
@@ -221,10 +315,14 @@ export async function dryRun(env: Env): Promise<DryRunResult> {
   const feedUrl = feedUrlOf(env);
   const requiredCategory = requiredCategoryOf(env);
 
-  const fetched = await fetchLatestReleases(feedUrl, userAgentOf(env));
+  const xml = await fetchFeed(feedUrl, userAgentOf(env));
+  const fetched = parseFeed(xml);
   const releases = fetched.filter((release) => isGameRelease(release, requiredCategory));
   const unseen = await filterUnseen(releases, env.SEEN_RELEASES);
   const wouldNotify = unseen.slice(0, maxPerRun);
+
+  const listed = upcomingEnabled(env) ? parseUpcomingTitles(xml) : [];
+  const storedUpcoming = await readUpcoming(env.SEEN_RELEASES);
 
   return {
     dryRun: true,
@@ -237,6 +335,11 @@ export async function dryRun(env: Env): Promise<DryRunResult> {
     unseen: unseen.length,
     wouldNotify: wouldNotify.map((p) => ({ ...p.release, isUpdate: p.isUpdate })),
     skipped: unseen.length - wouldNotify.length,
+    upcoming: {
+      tracking: storedUpcoming !== null,
+      listed: listed.length,
+      wouldAnnounce: storedUpcoming === null ? [] : newEntries(listed, storedUpcoming),
+    },
   };
 }
 
@@ -255,7 +358,7 @@ export default {
         `cron ${event.cron} [${result.channels.join("+")}]: fetched=${result.fetched} ` +
           `filtered=${result.filtered} unseen=${result.unseen} ` +
           `sent=${result.sent.length} updates=${result.updated.length} ` +
-          `failed=${result.failed.length}`,
+          `upcoming=${result.upcomingAdded.length} failed=${result.failed.length}`,
       );
     } catch (error) {
       // Feed or KV outage: nothing was written, the next run retries.

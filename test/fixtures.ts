@@ -36,6 +36,11 @@ export const FITGIRL_FEED_XML = `<?xml version="1.0" encoding="UTF-8"?>
     <pubDate>Sat, 30 Aug 2025 10:00:00 +0000</pubDate>
     <category><![CDATA[Uncategorized]]></category>
     <guid isPermaLink="true">https://fitgirl-repacks.site/upcoming-repacks/</guid>
+    <content:encoded><![CDATA[<div>
+      <span style="color: #339966;">⇢ Tiny Bakery</span><br />
+      <span style="color: #339966;">⇢ Sunken Engine</span><br />
+      <span style="color: #339966;">⇢ Dante&#8217;s Bloodline</span><br />
+    </div>]]></content:encoded>
   </item>
   <item>
     <title>Updates Digest for August 30, 2025</title>

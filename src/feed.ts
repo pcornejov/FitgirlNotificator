@@ -167,6 +167,20 @@ function readCoverImage(itemXml: string): string | undefined {
   return undefined;
 }
 
+/** Splits the document into its raw `<item>` blocks, markup intact. */
+export function splitItems(xml: string): string[] {
+  const items: string[] = [];
+
+  ITEM_RE.lastIndex = 0;
+  let match: RegExpExecArray | null = ITEM_RE.exec(xml);
+  while (match !== null) {
+    items.push(match[1] ?? "");
+    match = ITEM_RE.exec(xml);
+  }
+
+  return items;
+}
+
 /** Parses an RSS document into releases, skipping entries without a usable id. */
 export function parseFeed(xml: string): Release[] {
   const releases: Release[] = [];
@@ -206,16 +220,16 @@ export function parseFeed(xml: string): Release[] {
 }
 
 /**
- * Downloads and parses the FitGirl RSS feed.
+ * Downloads the raw feed document.
  *
  * @throws {FeedError} on network failure or a non-2xx response (403 from the
  * WAF, 5xx from the origin). The caller is expected to abort the run so no
  * state is mutated.
  */
-export async function fetchLatestReleases(
+export async function fetchFeed(
   feedUrl: string = DEFAULT_FEED_URL,
   userAgent: string = DEFAULT_USER_AGENT,
-): Promise<Release[]> {
+): Promise<string> {
   let response: Response;
   try {
     response = await fetch(feedUrl, {
@@ -243,5 +257,13 @@ export async function fetchLatestReleases(
     throw new FeedError("Feed response body was empty");
   }
 
-  return parseFeed(xml);
+  return xml;
+}
+
+/** Downloads the feed and parses it into releases. */
+export async function fetchLatestReleases(
+  feedUrl: string = DEFAULT_FEED_URL,
+  userAgent: string = DEFAULT_USER_AGENT,
+): Promise<Release[]> {
+  return parseFeed(await fetchFeed(feedUrl, userAgent));
 }
