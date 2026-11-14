@@ -7,7 +7,6 @@
  */
 
 import type { Release } from "./feed";
-import { formatUpcomingMessage } from "./upcoming";
 import { NotificationError, type SendOptions, deliver } from "./notify";
 
 export const CALLMEBOT_ENDPOINT = "https://api.callmebot.com/whatsapp.php";
@@ -45,26 +44,6 @@ export function formatMessage(release: Release, isUpdate = false): string {
     : "🎮 *Nuevo Release en FitGirl*";
 
   return `${heading}\n\n${release.title}\n\n🔗 ${release.link}`;
-}
-
-/**
- * Announces games newly added to the upcoming-repacks list.
- *
- * @throws {NotificationError} when delivery fails.
- */
-export async function sendUpcomingWhatsApp(
-  phone: string,
-  apiKey: string,
-  added: string[],
-  all: string[],
-  options: SendOptions = {},
-): Promise<void> {
-  if (phone === "" || apiKey === "") {
-    throw new NotificationError(CHANNEL, "Missing CallMeBot phone or API key", 0);
-  }
-
-  const message = formatUpcomingMessage(added, all, undefined, (t) => `*${t}*`);
-  await deliver(buildRequestUrl(phone, apiKey, message), CHANNEL, options, verifyBody);
 }
 
 /** Builds the fully encoded CallMeBot request URL. */
