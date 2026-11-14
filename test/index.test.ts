@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { parseFeed } from "../src/feed";
 import worker, { type Env, NOTIFY_INTERVAL_MS, dryRun, runNotifier } from "../src/index";
-import { UPCOMING_KEY, versionKey } from "../src/store";
+import { versionKey } from "../src/store";
 import { TELEGRAM_API_BASE } from "../src/telegram";
 import { CALLMEBOT_ENDPOINT } from "../src/whatsapp";
 import { FITGIRL_FEED_XML } from "./fixtures";
@@ -32,11 +32,10 @@ function vkey(id: string): string {
 }
 
 /**
- * Every key a completed run writes: the two markSeen writes per release, plus
- * the upcoming list it records.
+ * Every key a completed run writes: the two markSeen writes per release.
  */
 function keysFor(ids: string[]): string[] {
-  return [...ids, ...ids.map(vkey), UPCOMING_KEY].sort();
+  return [...ids, ...ids.map(vkey)].sort();
 }
 
 interface Scenario {
@@ -589,7 +588,7 @@ describe("multi-channel delivery", () => {
 
     expect(result.sent).toEqual([]);
     expect(result.failed).toHaveLength(4); // two releases x two channels
-    // No release was recorded; the upcoming list is independent of them.
+    // No release was recorded.
     for (const id of RELEASE_IDS) {
       expect(kv.entries.has(id)).toBe(false);
       expect(kv.entries.has(vkey(id))).toBe(false);
@@ -617,186 +616,5 @@ describe("multi-channel delivery", () => {
       /CALLMEBOT_PHONE and CALLMEBOT_API_KEY/,
     );
     expect(notified()).toHaveLength(0);
-  });
-});
-
-describe("upcoming repacks", () => {
-  const LISTED = ["Tiny Bakery", "Sunken Engine", "Dante’s Bloodline", "Cyber Drift 2"];
-
-  function upcomingMessages(sent: Sent[]): string[] {
-    return sent.map((s) => textOf(s)).filter((t) => t.includes("próximos repacks"));
-  }
-
-  it("records the list on the first run without announcing it", async () => {
-    const { env, kv, notified } = scenario();
-
-    const result = await runNotifier(env, { sleep: async () => {} }, async () => {});
-
-    expect(result.upcomingAdded).toEqual([]);
-    expect(upcomingMessages(notified())).toEqual([]);
-    expect(JSON.parse(kv.entries.get(UPCOMING_KEY)?.value ?? "[]")).toEqual(LISTED);
-  });
-
-  it("announces only the titles added since the previous run", async () => {
-    const { env, kv, notified } = scenario();
-    // Everything except the last title was already known.
-    kv.entries.set(UPCOMING_KEY, { value: JSON.stringify(LISTED.slice(0, 2)) });
-
-    const result = await runNotifier(env, { sleep: async () => {} }, async () => {});
-
-    expect(result.upcomingAdded).toEqual(["Dante’s Bloodline"]);
-    const messages = upcomingMessages(notified());
-    expect(messages).toHaveLength(1);
-    expect(messages[0]).toContain("🆕 Dante’s Bloodline");
-    // The full list rides along as a reminder of everything still coming.
-    expect(messages[0]).toContain("Todos los próximos (3)");
-    expect(messages[0]).toContain("• Tiny Bakery");
-    expect(messages[0]).not.toContain("🆕 Tiny Bakery");
-  });
-
-  it("says nothing when the list has not changed", async () => {
-    const { env, notified } = scenario();
-
-    await runNotifier(env, { sleep: async () => {} }, async () => {});
-    const second = await runNotifier(env, { sleep: async () => {} }, async () => {});
-
-    expect(second.upcomingAdded).toEqual([]);
-    expect(upcomingMessages(notified())).toEqual([]);
-  });
-
-  it("keeps the stored list current when titles only disappear", async () => {
-    const { env, kv, notified } = scenario();
-    kv.entries.set(UPCOMING_KEY, { value: JSON.stringify([...LISTED, "Released Already"]) });
-
-    const result = await runNotifier(env, { sleep: async () => {} }, async () => {});
-
-    expect(result.upcomingAdded).toEqual([]);
-    expect(upcomingMessages(notified())).toEqual([]);
-    expect(JSON.parse(kv.entries.get(UPCOMING_KEY)?.value ?? "[]")).toEqual(LISTED);
-  });
-
-  it("retries the additions next run when the announcement fails", async () => {
-    const { env, kv, notified } = scenario({}, (sent) =>
-      textOf(sent).includes("próximos repacks") ? 400 : 200,
-    );
-    kv.entries.set(UPCOMING_KEY, { value: JSON.stringify(LISTED.slice(0, 2)) });
-
-    const result = await runNotifier(env, { sleep: async () => {} }, async () => {});
-
-    expect(result.upcomingAdded).toEqual([]);
-    expect(result.failed.map((f) => f.id)).toContain("upcoming");
-    // The stored list is untouched, so the addition is not lost.
-    expect(JSON.parse(kv.entries.get(UPCOMING_KEY)?.value ?? "[]")).toEqual(LISTED.slice(0, 2));
-    expect(upcomingMessages(notified())).toHaveLength(1);
-  });
-
-  it("stays silent when NOTIFY_UPCOMING is false", async () => {
-    const { env, kv, notified } = scenario({ NOTIFY_UPCOMING: "false" });
-    kv.entries.set(UPCOMING_KEY, { value: JSON.stringify(LISTED.slice(0, 2)) });
-
-    const result = await runNotifier(env, { sleep: async () => {} }, async () => {});
-
-    expect(result.upcomingAdded).toEqual([]);
-    expect(upcomingMessages(notified())).toEqual([]);
-  });
-
-  it("reports the pending additions in the dry run without writing KV", async () => {
-    const { env, kv, notified } = scenario();
-    kv.entries.set(UPCOMING_KEY, { value: JSON.stringify(LISTED.slice(0, 2)) });
-
-    const result = await dryRun(env);
-
-    expect(result.upcoming.tracking).toBe(true);
-    expect(result.upcoming.listed).toBe(4);
-    expect(result.upcoming.wouldAnnounce).toEqual(["Dante’s Bloodline", "Cyber Drift 2"]);
-    expect(kv.putCalls).toBe(0);
-    expect(notified()).toHaveLength(0);
-  });
-});
-
-describe("upcoming dry run before a baseline exists", () => {
-  it("reports that it is not tracking yet", async () => {
-    const { env } = scenario();
-
-    const result = await dryRun(env);
-
-    expect(result.upcoming.tracking).toBe(false);
-    expect(result.upcoming.listed).toBe(4);
-    expect(result.upcoming.wouldAnnounce).toEqual([]);
-  });
-});
-
-describe("upcoming list alongside releases", () => {
-  function upcomingMessages(sent: Sent[]): string[] {
-    return sent.map((s) => textOf(s)).filter((t) => t.includes("Todos los próximos"));
-  }
-
-  /** A baseline that matches the fixture, so nothing counts as an addition. */
-  function seedCurrentList(kv: MemoryKV): void {
-    kv.entries.set(UPCOMING_KEY, {
-      value: JSON.stringify(["Tiny Bakery", "Sunken Engine", "Dante’s Bloodline", "Cyber Drift 2"]),
-    });
-  }
-
-  it("sends the list as a reminder when a release goes out", async () => {
-    const { env, kv, notified } = scenario();
-    seedCurrentList(kv);
-
-    const result = await runNotifier(env, { sleep: async () => {} }, async () => {});
-
-    expect(result.sent).toEqual(RELEASE_IDS);
-    expect(result.upcomingSent).toBe(true);
-    expect(result.upcomingAdded).toEqual([]);
-    const messages = upcomingMessages(notified());
-    expect(messages).toHaveLength(1);
-    // No additions, so the message is the standing list on its own.
-    expect(messages[0]).not.toContain("🆕");
-  });
-
-  it("drops the game it just published from the list", async () => {
-    const { env, kv, notified } = scenario();
-    seedCurrentList(kv);
-
-    await runNotifier(env, { sleep: async () => {} }, async () => {});
-
-    const message = upcomingMessages(notified())[0] as string;
-    // "Cyber Drift 2" was released in this run, so it is no longer coming.
-    expect(message).not.toContain("Cyber Drift 2");
-    expect(message).toContain("Todos los próximos (3)");
-    expect(message).toContain("• Tiny Bakery");
-  });
-
-  it("sends one list even when several releases go out", async () => {
-    const { env, kv, notified } = scenario();
-    seedCurrentList(kv);
-
-    await runNotifier(env, { sleep: async () => {} }, async () => {});
-
-    expect(upcomingMessages(notified())).toHaveLength(1);
-  });
-
-  it("stays silent when nothing was released and nothing was added", async () => {
-    const { env, kv, notified } = scenario();
-    seedCurrentList(kv);
-    // Mark both releases as already notified.
-    for (const id of RELEASE_IDS) kv.seed(vkey(id), id);
-
-    const result = await runNotifier(env, { sleep: async () => {} }, async () => {});
-
-    expect(result.sent).toEqual([]);
-    expect(result.upcomingSent).toBe(false);
-    expect(upcomingMessages(notified())).toEqual([]);
-  });
-
-  it("combines additions and the reminder into a single message", async () => {
-    const { env, kv, notified } = scenario();
-    kv.entries.set(UPCOMING_KEY, { value: JSON.stringify(["Tiny Bakery", "Sunken Engine"]) });
-
-    await runNotifier(env, { sleep: async () => {} }, async () => {});
-
-    const messages = upcomingMessages(notified());
-    expect(messages).toHaveLength(1);
-    expect(messages[0]).toContain("🆕 Dante’s Bloodline");
-    expect(messages[0]).toContain("📋");
   });
 });
