@@ -14,6 +14,8 @@ export const DEFAULT_CHANNEL: ChannelName = "telegram";
 
 export interface Notifier {
   readonly channel: ChannelName;
+  /** Who receives it (chat id or phone): the unit of delivery tracking. */
+  readonly recipient: string;
   send(release: Release, isUpdate: boolean, options?: SendOptions): Promise<void>;
 }
 
@@ -85,17 +87,17 @@ export function resolveChannels(value: string | undefined): ChannelName[] {
  * before any KV write happens.
  */
 export function createNotifier(config: NotifierConfig): Notifier {
-  return buildNotifier(resolveChannel(config.NOTIFIER), config);
+  return buildNotifiers(resolveChannel(config.NOTIFIER), config)[0] as Notifier;
 }
 
 /**
- * Builds one notifier per configured channel.
+ * Builds one notifier per recipient of every configured channel.
  *
  * Every channel's credentials are validated up front: a half-configured fan-out
  * fails the run before any KV write rather than silently dropping a channel.
  */
 export function createNotifiers(config: NotifierConfig): Notifier[] {
-  return resolveChannels(config.NOTIFIER).map((channel) => buildNotifier(channel, config));
+  return resolveChannels(config.NOTIFIER).flatMap((channel) => buildNotifiers(channel, config));
 }
 
 /** Parses `TELEGRAM_CHAT_ID`: one id or a comma-separated list, deduplicated. */
@@ -107,7 +109,7 @@ export function parseChatIds(value: string | undefined): string[] {
   return [...new Set(ids)];
 }
 
-function buildNotifier(channel: ChannelName, config: NotifierConfig): Notifier {
+function buildNotifiers(channel: ChannelName, config: NotifierConfig): Notifier[] {
   if (channel === "telegram") {
     const token = config.TELEGRAM_BOT_TOKEN ?? "";
     const chatIds = parseChatIds(config.TELEGRAM_CHAT_ID);
@@ -116,30 +118,12 @@ function buildNotifier(channel: ChannelName, config: NotifierConfig): Notifier {
         "TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID must be configured via `wrangler secret put`",
       );
     }
-    return {
+    return chatIds.map((chatId) => ({
       channel,
-      send: async (release, isUpdate, options) => {
-        // Every recipient is attempted; one unreachable chat must not cost the
-        // others their alert. The send only fails when nobody got it.
-        const results = await Promise.allSettled(
-          chatIds.map((chatId) =>
-            sendTelegramNotification(token, chatId, release, isUpdate, options ?? {}),
-          ),
-        );
-        const failures = results.filter(
-          (r): r is PromiseRejectedResult => r.status === "rejected",
-        );
-        for (const failure of failures) {
-          console.warn(
-            `telegram recipient failed for ${release.id}: ` +
-              `${failure.reason instanceof Error ? failure.reason.message : String(failure.reason)}`,
-          );
-        }
-        if (failures.length === results.length) {
-          throw failures[0]?.reason;
-        }
-      },
-    };
+      recipient: chatId,
+      send: (release, isUpdate, options) =>
+        sendTelegramNotification(token, chatId, release, isUpdate, options ?? {}),
+    }));
   }
 
   const phone = config.CALLMEBOT_PHONE ?? "";
@@ -149,9 +133,12 @@ function buildNotifier(channel: ChannelName, config: NotifierConfig): Notifier {
       "CALLMEBOT_PHONE and CALLMEBOT_API_KEY must be configured via `wrangler secret put`",
     );
   }
-  return {
-    channel,
-    send: (release, isUpdate, options) =>
-      sendWhatsAppNotification(phone, apiKey, release, isUpdate, options ?? {}),
-  };
+  return [
+    {
+      channel,
+      recipient: phone,
+      send: (release, isUpdate, options) =>
+        sendWhatsAppNotification(phone, apiKey, release, isUpdate, options ?? {}),
+    },
+  ];
 }

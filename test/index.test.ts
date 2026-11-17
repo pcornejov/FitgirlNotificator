@@ -34,8 +34,12 @@ function vkey(id: string): string {
 /**
  * Every key a completed run writes: the two markSeen writes per release.
  */
-function keysFor(ids: string[]): string[] {
-  return [...ids, ...ids.map(vkey)].sort();
+function keysFor(
+  ids: string[],
+  deliveries: Array<[channel: string, recipient: string]> = [["telegram", "42"]],
+): string[] {
+  const sent = ids.flatMap((id) => deliveries.map(([c, r]) => `sent:${vkey(id)}:${c}:${r}`));
+  return [...ids, ...ids.map(vkey), ...sent].sort();
 }
 
 interface Scenario {
@@ -250,7 +254,7 @@ describe("channel selection", () => {
     expect(result.channels).toEqual(["callmebot"]);
     expect(notified()).toHaveLength(2);
     expect(notified().every((s) => s.url.href.startsWith(CALLMEBOT_ENDPOINT))).toBe(true);
-    expect([...kv.entries.keys()].sort()).toEqual(keysFor(RELEASE_IDS));
+    expect([...kv.entries.keys()].sort()).toEqual(keysFor(RELEASE_IDS, [["callmebot", "10000000000"]]));
   });
 
   it("does not require the inactive channel's credentials", async () => {
@@ -367,7 +371,12 @@ describe("worker handlers", () => {
     );
 
     expect(notified()).toHaveLength(1);
-    expect([...kv.entries.keys()].sort()).toEqual(keysFor(RELEASE_IDS));
+    // The pre-seeded release was never delivered by this run, so it has no
+    // per-recipient delivery key.
+    const expected = keysFor(RELEASE_IDS).filter(
+      (key) => key !== `sent:${vkey(RELEASE_IDS[0] as string)}:telegram:42`,
+    );
+    expect([...kv.entries.keys()].sort()).toEqual(expected);
   });
 
   it("scheduled swallows a feed outage without writing to KV", async () => {
@@ -552,7 +561,7 @@ describe("multi-channel delivery", () => {
     const split = byChannel(notified());
     expect(split.telegram).toHaveLength(2);
     expect(split.callmebot).toHaveLength(2);
-    expect([...kv.entries.keys()].sort()).toEqual(keysFor(RELEASE_IDS));
+    expect([...kv.entries.keys()].sort()).toEqual(keysFor(RELEASE_IDS, [["telegram", "42"], ["callmebot", "10000000000"]]));
   });
 
   it("keeps delivering on one channel when the other fails", async () => {
@@ -616,5 +625,52 @@ describe("multi-channel delivery", () => {
       /CALLMEBOT_PHONE and CALLMEBOT_API_KEY/,
     );
     expect(notified()).toHaveLength(0);
+  });
+});
+
+describe("per-recipient delivery tracking", () => {
+  const TWO = { ...TELEGRAM_SECRETS, TELEGRAM_CHAT_ID: "42,43" };
+  const chatOf = (s: Sent) => s.url.searchParams.get("chat_id");
+
+  it("sends each release to every chat id", async () => {
+    const { env, notified } = scenario(TWO);
+
+    const result = await runNotifier(env, { sleep: async () => {} }, async () => {});
+
+    expect(result.sent).toEqual(RELEASE_IDS);
+    expect(notified().map(chatOf).sort()).toEqual(["42", "42", "43", "43"]);
+  });
+
+  it("retries only the recipient that failed transiently, without duplicating the rest", async () => {
+    // Chat 43 is down (500) on the first run, healthy afterwards.
+    let down = true;
+    const { env, kv, notified } = scenario(TWO, (sent) =>
+      down && chatOf(sent) === "43" ? 500 : 200,
+    );
+
+    const first = await runNotifier(env, { sleep: async () => {}, retryDelayMs: 0 }, async () => {});
+    expect(first.sent).toEqual([]); // not complete, so not marked seen
+    expect(kv.entries.has(RELEASE_IDS[0] as string)).toBe(false);
+
+    down = false;
+    const before = notified().filter((s) => chatOf(s) === "42").length;
+    const second = await runNotifier(env, { sleep: async () => {}, retryDelayMs: 0 }, async () => {});
+
+    expect(second.sent).toEqual(RELEASE_IDS);
+    // Chat 42 already had both releases: it must not receive them again.
+    expect(notified().filter((s) => chatOf(s) === "42")).toHaveLength(before);
+    expect(notified().filter((s) => chatOf(s) === "43" && s.url.pathname.endsWith("Message"))).not.toHaveLength(0);
+  });
+
+  it("gives up on a recipient that refuses permanently instead of retrying forever", async () => {
+    const { env, notified } = scenario(TWO, (sent) => (chatOf(sent) === "43" ? 403 : 200));
+
+    const first = await runNotifier(env, { sleep: async () => {} }, async () => {});
+    expect(first.sent).toEqual(RELEASE_IDS);
+
+    const callsAfterFirst = notified().length;
+    const second = await runNotifier(env, { sleep: async () => {} }, async () => {});
+    expect(second.sent).toEqual([]);
+    expect(notified()).toHaveLength(callsAfterFirst);
   });
 });

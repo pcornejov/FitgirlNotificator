@@ -297,3 +297,22 @@ describe("buildPhotoRequestUrl", () => {
     expect(url.searchParams.get("parse_mode")).toBe("HTML");
   });
 });
+
+describe("timeouts", () => {
+  it("does NOT retry a request that timed out: it may already have been delivered", async () => {
+    const fetchMock = vi.fn((_url: string, init?: RequestInit) =>
+      new Promise<Response>((_resolve, reject) => {
+        init?.signal?.addEventListener("abort", () => reject(new Error("aborted")));
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(
+      sendTelegramNotification(TOKEN, CHAT_ID, RELEASE, false, {
+        timeoutMs: 5,
+        sleep: async () => {},
+      }),
+    ).rejects.toBeInstanceOf(NotificationError);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+});

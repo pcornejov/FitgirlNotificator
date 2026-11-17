@@ -121,3 +121,34 @@ export async function markSeen(
   await kv.put(versionKey(release), now, options);
   await kv.put(postKey(release), now, options);
 }
+
+/**
+ * Key recording that one recipient already received one version of a release.
+ *
+ * Tracked per recipient so that retrying a release after a partial failure
+ * only reaches the recipients that are still missing it.
+ */
+export function deliveryKey(release: Release, channel: string, recipient: string): string {
+  return `sent:${versionKey(release)}:${channel}:${recipient}`;
+}
+
+export async function hasBeenDelivered(
+  release: Release,
+  channel: string,
+  recipient: string,
+  kv: SeenReleasesKV,
+): Promise<boolean> {
+  return (await kv.get(deliveryKey(release, channel, recipient))) !== null;
+}
+
+export async function markDelivered(
+  release: Release,
+  channel: string,
+  recipient: string,
+  kv: SeenReleasesKV,
+  ttlDays: number = DEFAULT_SEEN_TTL_DAYS,
+): Promise<void> {
+  await kv.put(deliveryKey(release, channel, recipient), new Date().toISOString(), {
+    expirationTtl: ttlSecondsFromDays(ttlDays),
+  });
+}

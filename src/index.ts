@@ -25,11 +25,13 @@ import {
   createNotifiers,
   resolveChannels,
 } from "./notifier";
-import type { SendOptions } from "./notify";
+import { type SendOptions, isPermanentFailure } from "./notify";
 import {
   DEFAULT_SEEN_TTL_DAYS,
   type SeenReleasesKV,
   filterUnseen,
+  hasBeenDelivered,
+  markDelivered,
   markSeen,
 } from "./store";
 
@@ -172,32 +174,45 @@ export async function runNotifier(
       await pause(NOTIFY_INTERVAL_MS);
     }
 
-    // Every channel is attempted; one failing must not stop the others.
+    // Every recipient is attempted; one failing must not stop the others.
+    // Deliveries are recorded per recipient, so a retry of this release only
+    // reaches those that are still missing it and nobody gets a duplicate.
     let delivered = 0;
+    let retryable = 0;
     for (const notifier of notifiers) {
+      const { channel, recipient } = notifier;
       try {
+        if (await hasBeenDelivered(release, channel, recipient, env.SEEN_RELEASES)) {
+          delivered += 1;
+          continue;
+        }
         await notifier.send(release, isUpdate, sendOptions);
         delivered += 1;
+        try {
+          await markDelivered(release, channel, recipient, env.SEEN_RELEASES, ttlDays);
+        } catch (error) {
+          console.error(
+            `KV write failed after sending ${release.id} to ${channel}:${recipient}: ${errorMessage(error)}`,
+          );
+        }
       } catch (error) {
-        result.failed.push({
-          id: release.id,
-          channel: notifier.channel,
-          error: errorMessage(error),
-        });
+        result.failed.push({ id: release.id, channel, error: errorMessage(error) });
         console.error(
-          `${notifier.channel} delivery failed for ${release.id}: ${errorMessage(error)}`,
+          `${channel} delivery failed for ${release.id} to ${recipient}: ${errorMessage(error)}`,
         );
+        // A permanent refusal (blocked bot, bad chat id) is not retried forever.
+        if (!isPermanentFailure(error)) {
+          retryable += 1;
+        }
       }
     }
 
-    if (delivered === 0) {
-      // Nowhere to be seen: leave it unmarked so the next run retries it.
+    if (delivered === 0 || retryable > 0) {
+      // Nobody got it, or someone still can: leave it unmarked so the next run
+      // retries, which reaches only the recipients not yet delivered.
       continue;
     }
 
-    // Marked once at least one channel delivered. Holding the mark back until
-    // every channel succeeds would make a persistently broken channel resend
-    // the same release on the working ones every 15 minutes.
     try {
       await markSeen(release, env.SEEN_RELEASES, ttlDays);
       result.sent.push(release.id);
