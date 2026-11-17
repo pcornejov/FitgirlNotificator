@@ -68,6 +68,31 @@ export function proxiedCoverUrl(imageUrl: string): string {
   return `${IMAGE_PROXY_BASE}/${source.host}${source.pathname}${query === "" ? "" : `?${query}`}`;
 }
 
+/** How long to wait for the proxy to fetch a cover it has not cached yet. */
+export const COVER_WARMUP_TIMEOUT_MS = 10_000;
+
+/**
+ * Asks the image proxy for the cover once, ahead of Telegram.
+ *
+ * On a cold cache the proxy has to pull the image from a slow origin, and
+ * Telegram gives up on it with a 400. Fetching it first leaves a cached copy
+ * for Telegram to find. Best effort: any failure is ignored and the photo is
+ * attempted anyway.
+ */
+export async function warmCover(photoUrl: string, timeoutMs = COVER_WARMUP_TIMEOUT_MS): Promise<void> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const response = await fetch(photoUrl, { method: "GET", signal: controller.signal });
+    // The body must be consumed so the proxy finishes and caches the image.
+    await response.arrayBuffer();
+  } catch {
+    // Ignored on purpose: Telegram may still manage to fetch it.
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 /**
  * Builds the sendPhoto request URL, with the message as the photo caption.
  *
@@ -140,8 +165,10 @@ export async function sendTelegramNotification(
 
   if (release.imageUrl !== undefined && release.imageUrl !== "") {
     try {
+      const photoUrl = proxiedCoverUrl(release.imageUrl);
+      await warmCover(photoUrl);
       await deliver(
-        buildPhotoRequestUrl(botToken, chatId, proxiedCoverUrl(release.imageUrl), message),
+        buildPhotoRequestUrl(botToken, chatId, photoUrl, message),
         CHANNEL,
         options,
         verifyBody,

@@ -229,16 +229,52 @@ describe("cover images", () => {
     return impl;
   }
 
-  it("hands Telegram the proxied URL and downloads nothing itself", async () => {
+  /** Calls that went to Telegram, ignoring the cover warm-up request. */
+  function telegramCalls(fetchMock: ReturnType<typeof vi.fn>): string[] {
+    return fetchMock.mock.calls
+      .map((call) => String(call[0]))
+      .filter((u) => u.startsWith(TELEGRAM_API_BASE));
+  }
+
+  it("warms the proxy with the cover before asking Telegram to fetch it", async () => {
     const fetchMock = mockTelegram();
 
     await sendTelegramNotification(TOKEN, CHAT_ID, WITH_IMAGE, false, {
       sleep: async () => {},
     });
 
-    // Exactly one request, to Telegram: the image host is never contacted.
-    expect(fetchMock).toHaveBeenCalledTimes(1);
-    const url = new URL(String(fetchMock.mock.calls[0]?.[0]));
+    expect(String(fetchMock.mock.calls[0]?.[0])).toBe(proxiedCoverUrl(COVER_URL));
+    expect(String(fetchMock.mock.calls[1]?.[0])).toContain("/sendPhoto");
+  });
+
+  it("still sends the photo when the warm-up fails", async () => {
+    const fetchMock = vi.fn(async (input: string | URL) => {
+      if (!String(input).startsWith(TELEGRAM_API_BASE)) {
+        throw new Error("proxy unreachable");
+      }
+      return new Response(JSON.stringify({ ok: true }), { status: 200 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await sendTelegramNotification(TOKEN, CHAT_ID, WITH_IMAGE, false, {
+      sleep: async () => {},
+    });
+
+    expect(telegramCalls(fetchMock)[0]).toContain("/sendPhoto");
+  });
+
+  it("hands Telegram the proxied URL and never downloads the image from its origin", async () => {
+    const fetchMock = mockTelegram();
+
+    await sendTelegramNotification(TOKEN, CHAT_ID, WITH_IMAGE, false, {
+      sleep: async () => {},
+    });
+
+    // The original host is never contacted; only the proxy and Telegram are.
+    expect(fetchMock.mock.calls.map((c) => new URL(String(c[0])).host)).not.toContain(
+      new URL(COVER_URL).host,
+    );
+    const url = new URL(telegramCalls(fetchMock)[0] as string);
     expect(url.origin).toBe(TELEGRAM_API_BASE);
     expect(url.pathname).toContain("/sendPhoto");
     expect(url.searchParams.get("photo")).toBe(proxiedCoverUrl(COVER_URL));
@@ -252,9 +288,7 @@ describe("cover images", () => {
       sleep: async () => {},
     });
 
-    expect(String(fetchMock.mock.calls[0]?.[0])).not.toContain(
-      encodeURIComponent(COVER_URL),
-    );
+    expect(telegramCalls(fetchMock)[0]).not.toContain(encodeURIComponent(COVER_URL));
   });
 
   it("uses sendMessage when the release has no cover", async () => {
@@ -273,8 +307,8 @@ describe("cover images", () => {
       sleep: async () => {},
     });
 
-    expect(String(fetchMock.mock.calls[0]?.[0])).toContain("/sendPhoto");
-    expect(String(fetchMock.mock.calls[1]?.[0])).toContain("/sendMessage");
+    expect(telegramCalls(fetchMock)[0]).toContain("/sendPhoto");
+    expect(telegramCalls(fetchMock)[1]).toContain("/sendMessage");
   });
 
   it("carries the update heading into the caption", async () => {
@@ -282,7 +316,7 @@ describe("cover images", () => {
 
     await sendTelegramNotification(TOKEN, CHAT_ID, WITH_IMAGE, true, { sleep: async () => {} });
 
-    const caption = new URL(String(fetchMock.mock.calls[0]?.[0])).searchParams.get("caption");
+    const caption = new URL(telegramCalls(fetchMock)[0] as string).searchParams.get("caption");
     expect(caption).toContain("actualizado");
   });
 });
