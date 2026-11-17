@@ -98,19 +98,47 @@ export function createNotifiers(config: NotifierConfig): Notifier[] {
   return resolveChannels(config.NOTIFIER).map((channel) => buildNotifier(channel, config));
 }
 
+/** Parses `TELEGRAM_CHAT_ID`: one id or a comma-separated list, deduplicated. */
+export function parseChatIds(value: string | undefined): string[] {
+  const ids = (value ?? "")
+    .split(",")
+    .map((id) => id.trim())
+    .filter((id) => id !== "");
+  return [...new Set(ids)];
+}
+
 function buildNotifier(channel: ChannelName, config: NotifierConfig): Notifier {
   if (channel === "telegram") {
     const token = config.TELEGRAM_BOT_TOKEN ?? "";
-    const chatId = config.TELEGRAM_CHAT_ID ?? "";
-    if (token === "" || chatId === "") {
+    const chatIds = parseChatIds(config.TELEGRAM_CHAT_ID);
+    if (token === "" || chatIds.length === 0) {
       throw new NotifierConfigError(
         "TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID must be configured via `wrangler secret put`",
       );
     }
     return {
       channel,
-      send: (release, isUpdate, options) =>
-        sendTelegramNotification(token, chatId, release, isUpdate, options ?? {}),
+      send: async (release, isUpdate, options) => {
+        // Every recipient is attempted; one unreachable chat must not cost the
+        // others their alert. The send only fails when nobody got it.
+        const results = await Promise.allSettled(
+          chatIds.map((chatId) =>
+            sendTelegramNotification(token, chatId, release, isUpdate, options ?? {}),
+          ),
+        );
+        const failures = results.filter(
+          (r): r is PromiseRejectedResult => r.status === "rejected",
+        );
+        for (const failure of failures) {
+          console.warn(
+            `telegram recipient failed for ${release.id}: ` +
+              `${failure.reason instanceof Error ? failure.reason.message : String(failure.reason)}`,
+          );
+        }
+        if (failures.length === results.length) {
+          throw failures[0]?.reason;
+        }
+      },
     };
   }
 
