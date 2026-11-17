@@ -164,7 +164,7 @@ Secrets (vía `wrangler secret put`, **nunca** versionados):
 | Secret | Canal | Descripción |
 | --- | --- | --- |
 | `TELEGRAM_BOT_TOKEN` | `telegram` | Token que entrega @BotFather. |
-| `TELEGRAM_CHAT_ID` | `telegram` | Id del chat destino (negativo si es un grupo). |
+| `TELEGRAM_CHAT_ID` | `telegram` | Id del chat destino (negativo si es un grupo). Admite varios separados por comas (`123,456`); cada uno recibe todos los avisos. |
 | `CALLMEBOT_PHONE` | `callmebot` | Teléfono destino, con código de país y sin `+`. |
 | `CALLMEBOT_API_KEY` | `callmebot` | API key entregada por el bot de CallMeBot. |
 

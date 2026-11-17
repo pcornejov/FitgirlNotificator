@@ -158,3 +158,16 @@ describe("createNotifiers", () => {
     expect(urls.some((u) => u.includes("api.callmebot.com"))).toBe(true);
   });
 });
+
+import { parseChatIds } from "../src/notifier";
+
+describe("parseChatIds", () => {
+  it("splits, trims and deduplicates a comma-separated list", () => {
+    expect(parseChatIds(" 1, 2,,1 ,-1003 ")).toEqual(["1", "2", "-1003"]);
+  });
+
+  it("returns an empty list for unset or blank values", () => {
+    expect(parseChatIds(undefined)).toEqual([]);
+    expect(parseChatIds("  , ")).toEqual([]);
+  });
+});
