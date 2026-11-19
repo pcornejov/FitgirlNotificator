@@ -164,6 +164,7 @@ Secrets (vía `wrangler secret put`, **nunca** versionados):
 | Secret | Canal | Descripción |
 | --- | --- | --- |
 | `TELEGRAM_BOT_TOKEN` | `telegram` | Token que entrega @BotFather. |
+| `TELEGRAM_WEBHOOK_SECRET` | `telegram` | Secreto compartido con Telegram para el webhook de búsqueda (`POST /telegram/webhook`). Sin él, el endpoint no existe. |
 | `TELEGRAM_CHAT_ID` | `telegram` | Id del chat destino (negativo si es un grupo). Admite varios separados por comas (`123,456`); cada uno recibe todos los avisos. |
 | `CALLMEBOT_PHONE` | `callmebot` | Teléfono destino, con código de país y sin `+`. |
 | `CALLMEBOT_API_KEY` | `callmebot` | API key entregada por el bot de CallMeBot. |
@@ -273,3 +274,21 @@ El Cron Trigger `*/15 * * * *` queda activo automáticamente tras el deploy.
   `npx wrangler kv key put --binding SEEN_RELEASES "<id-del-release>" "seen"`.
 - CallMeBot es un servicio gratuito de terceros pensado para uso personal;
   aplica límites de tasa razonables. Si su bot está lleno, usa Telegram.
+
+## Búsqueda desde Telegram
+
+El bot responde a mensajes de los chats listados en `TELEGRAM_CHAT_ID`: escribe
+el nombre de un juego (o `/buscar nombre`) y devuelve hasta 5 publicaciones del
+sitio con su link. `/start` responde con el chat id de quien escribe, para que
+un nuevo suscriptor pueda pasarlo.
+
+Telegram entrega los mensajes por webhook. Una sola vez, registra la URL:
+
+```bash
+npx wrangler secret put TELEGRAM_WEBHOOK_SECRET   # cualquier cadena larga y aleatoria
+curl "https://api.telegram.org/bot<TOKEN>/setWebhook" \
+  --data-urlencode "url=https://<tu-worker>.workers.dev/telegram/webhook" \
+  --data-urlencode "secret_token=<el mismo secreto>"
+```
+
+Con el webhook activo, `getUpdates` deja de funcionar: usa `/start` para obtener un chat id.

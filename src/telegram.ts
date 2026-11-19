@@ -35,11 +35,13 @@ export function buildRequestUrl(
   botToken: string,
   chatId: string,
   message: string,
+  disablePreview = false,
 ): string {
   const query = [
     `chat_id=${encodeURIComponent(chatId)}`,
     `text=${encodeURIComponent(message)}`,
     "parse_mode=HTML",
+    ...(disablePreview ? ["disable_web_page_preview=true"] : []),
   ].join("&");
 
   return `${TELEGRAM_API_BASE}/bot${encodeURIComponent(botToken)}/sendMessage?${query}`;
@@ -184,4 +186,20 @@ export async function sendTelegramNotification(
   }
 
   await deliver(buildRequestUrl(botToken, chatId, message), CHANNEL, options, verifyBody);
+}
+
+/**
+ * Sends a plain HTML message, used for replies to the people talking to the bot.
+ * Link previews are off so a list of results stays compact.
+ */
+export async function sendTelegramText(
+  botToken: string,
+  chatId: string,
+  html: string,
+  options: SendOptions = {},
+): Promise<void> {
+  if (botToken === "" || chatId === "") {
+    throw new NotificationError(CHANNEL, "Missing Telegram bot token or chat id", 0);
+  }
+  await deliver(buildRequestUrl(botToken, chatId, html, true), CHANNEL, options, verifyBody);
 }

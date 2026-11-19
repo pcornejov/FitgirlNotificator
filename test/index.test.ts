@@ -674,3 +674,54 @@ describe("per-recipient delivery tracking", () => {
     expect(notified()).toHaveLength(callsAfterFirst);
   });
 });
+
+describe("telegram webhook", () => {
+  const SECRET = "s3cret";
+  const hook = (init: RequestInit = {}) =>
+    new Request("https://worker.dev/telegram/webhook", { method: "POST", ...init });
+  const update = JSON.stringify({ message: { text: "/start", chat: { id: 42, type: "private" } } });
+
+  it("does not exist until a webhook secret is configured", async () => {
+    const { env } = scenario();
+    const response = await worker.fetch(hook({ body: update }), env);
+    expect(response.status).toBe(404);
+  });
+
+  it("rejects calls without the right secret header", async () => {
+    const { env, notified } = scenario({ TELEGRAM_WEBHOOK_SECRET: SECRET });
+    const wrong = await worker.fetch(
+      hook({ body: update, headers: { "X-Telegram-Bot-Api-Secret-Token": "nope" } }),
+      env,
+    );
+    const missing = await worker.fetch(hook({ body: update }), env);
+    expect(wrong.status).toBe(403);
+    expect(missing.status).toBe(403);
+    expect(notified()).toHaveLength(0);
+  });
+
+  it("only accepts POST", async () => {
+    const { env } = scenario({ TELEGRAM_WEBHOOK_SECRET: SECRET });
+    const response = await worker.fetch(new Request("https://worker.dev/telegram/webhook"), env);
+    expect(response.status).toBe(405);
+  });
+
+  it("answers 200 and replies to a valid update", async () => {
+    const { env, notified } = scenario({ TELEGRAM_WEBHOOK_SECRET: SECRET });
+    const response = await worker.fetch(
+      hook({ body: update, headers: { "X-Telegram-Bot-Api-Secret-Token": SECRET } }),
+      env,
+    );
+    expect(response.status).toBe(200);
+    expect(notified()).toHaveLength(1);
+    expect(textOf(notified()[0] as Sent)).toContain("42");
+  });
+
+  it("rejects an unreadable body", async () => {
+    const { env } = scenario({ TELEGRAM_WEBHOOK_SECRET: SECRET });
+    const response = await worker.fetch(
+      hook({ body: "not json", headers: { "X-Telegram-Bot-Api-Secret-Token": SECRET } }),
+      env,
+    );
+    expect(response.status).toBe(400);
+  });
+});

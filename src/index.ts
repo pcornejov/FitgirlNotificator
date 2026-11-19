@@ -18,6 +18,7 @@ import {
   isGameRelease,
   parseFeed,
 } from "./feed";
+import { type TelegramUpdate, handleUpdate } from "./bot";
 import {
   type ChannelName,
   type Notifier,
@@ -56,6 +57,8 @@ export interface Env {
   // secrets (wrangler secret put)
   TELEGRAM_BOT_TOKEN?: string;
   TELEGRAM_CHAT_ID?: string;
+  /** Shared secret Telegram echoes in a header on every webhook call. */
+  TELEGRAM_WEBHOOK_SECRET?: string;
   CALLMEBOT_PHONE?: string;
   CALLMEBOT_API_KEY?: string;
 }
@@ -281,8 +284,36 @@ export default {
     }
   },
 
-  async fetch(request: Request, env: Env): Promise<Response> {
+  async fetch(request: Request, env: Env, ctx?: ExecutionContext): Promise<Response> {
     const url = new URL(request.url);
+
+    if (url.pathname === "/telegram/webhook") {
+      const secret = env.TELEGRAM_WEBHOOK_SECRET ?? "";
+      // Without a configured secret the endpoint does not exist.
+      if (secret === "") {
+        return json({ error: "Not found" }, 404);
+      }
+      if (request.method !== "POST") {
+        return json({ error: "Method not allowed" }, 405);
+      }
+      if (request.headers.get("X-Telegram-Bot-Api-Secret-Token") !== secret) {
+        return json({ error: "Forbidden" }, 403);
+      }
+      let update: TelegramUpdate;
+      try {
+        update = (await request.json()) as TelegramUpdate;
+      } catch {
+        return json({ error: "Bad request" }, 400);
+      }
+      // Answered after the 200 so Telegram never times out on a slow search.
+      const work = handleUpdate(update, env);
+      if (ctx !== undefined) {
+        ctx.waitUntil(work);
+      } else {
+        await work;
+      }
+      return json({ ok: true });
+    }
 
     if (url.pathname === "/test") {
       if (request.method !== "GET") {
